@@ -1,0 +1,40 @@
+#PCSWMM project file
+#Please do not edit
+[General]
+PCSWMM.NET Version=7.7.3920
+SWMM5 Version=5.2.4
+Version=3
+Map EPSG=6543
+CS Name=NAD83 2011 North Carolina ftUS
+Last Report Date=12/15/2025 2:40:12 PM
+[2D]
+2DModeling=False
+[Project Summary]
+Compute Time=n/a
+Routing Error=n/a
+Runoff Error=n/a
+[Authors]
+Author0=Michael Flynn,46003.5826490162
+[Layers]
+layer0=Subcatchments
+layer1=Outlets
+layer2=Weirs
+layer3=Orifices
+layer4=Pumps
+layer5=Conduits
+layer6=Storages
+layer7=Dividers
+layer8=Outfalls
+layer9=Junctions
+[Graph]
+Plotting Position=Gringorten
+[Erosion]
+ErosionOn=False
+Use C TS=False
+Calculate LS=False
+Use TSS=False
+[Scenarios]
+"Scenarios0"="C:\Users\michael.flynn\OneDrive - McGill Associates, PA\Desktop\AI\QuantumTest_Simple.inp",False,False,QuantumTest_Simple
+"Scenarios1"="C:\Users\michael.flynn\Downloads\QuantumTest_Simple.inp",False,False,QuantumTest_Simple
+[Scripts]
+Script0=PCSWMM_Quantum_CLEAN.py

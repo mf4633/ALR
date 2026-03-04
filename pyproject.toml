@@ -1,0 +1,111 @@
+[build-system]
+requires = ["setuptools>=45", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "quantum_hydraulics"
+version = "1.0.0"
+description = "Physics-based hydraulic simulation with vortex particle methods and observation-dependent resolution"
+readme = "quantum_hydraulics/README.md"
+license = {text = "MIT"}
+authors = [
+    {name = "Michael Flynn"}
+]
+requires-python = ">=3.8"
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Topic :: Scientific/Engineering :: Physics",
+    "Topic :: Scientific/Engineering :: Hydrology",
+    "Topic :: Scientific/Engineering :: Visualization",
+]
+dependencies = [
+    "numpy>=1.20",
+    "scipy>=1.7",
+    "matplotlib>=3.5",
+]
+
+[project.optional-dependencies]
+pcswmm = ["pyswmm>=1.0", "pandas>=1.3"]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov>=3.0",
+    "black>=22.0",
+    "flake8>=4.0",
+    "mypy>=0.990",
+]
+docs = [
+    "sphinx>=4.0",
+    "sphinx-rtd-theme>=1.0",
+]
+all = [
+    "pyswmm>=1.0",
+    "pandas>=1.3",
+    "pytest>=7.0",
+    "pytest-cov>=3.0",
+]
+
+[project.scripts]
+quantum-hydraulics = "quantum_hydraulics.__main__:main"
+
+[project.urls]
+Homepage = "https://github.com/michaelflynn/quantum-hydraulics"
+Documentation = "https://github.com/michaelflynn/quantum-hydraulics#readme"
+Repository = "https://github.com/michaelflynn/quantum-hydraulics"
+Issues = "https://github.com/michaelflynn/quantum-hydraulics/issues"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["quantum_hydraulics*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_functions = ["test_*"]
+addopts = "-v --tb=short"
+markers = [
+    "slow: marks tests as slow",
+    "integration: marks tests as integration tests",
+]
+
+[tool.black]
+line-length = 100
+target-version = ["py38", "py39", "py310", "py311"]
+include = '\.pyi?$'
+exclude = '''
+/(
+    \.eggs
+  | \.git
+  | \.mypy_cache
+  | \.pytest_cache
+  | \.venv
+  | build
+  | dist
+)/
+'''
+
+[tool.mypy]
+python_version = "3.8"
+warn_return_any = true
+warn_unused_configs = true
+ignore_missing_imports = true
+
+[tool.coverage.run]
+source = ["quantum_hydraulics"]
+branch = true
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+]

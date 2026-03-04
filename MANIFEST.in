@@ -1,0 +1,16 @@
+include LICENSE
+include README.md
+include pyproject.toml
+include quantum_hydraulics/README.md
+
+recursive-include quantum_hydraulics *.py
+recursive-include tests *.py
+
+recursive-exclude * __pycache__
+recursive-exclude * *.py[co]
+recursive-exclude * *.so
+recursive-exclude * *.dylib
+
+global-exclude *.egg-info/*
+global-exclude .git*
+global-exclude .DS_Store

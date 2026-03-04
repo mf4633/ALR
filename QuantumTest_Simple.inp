@@ -1,0 +1,167 @@
+[TITLE]
+;;Project Title/Notes
+Quantum Hydraulics Test Model
+Simple 2-hour storm with guaranteed flow
+Created for testing quantum turbulence analysis
+
+[OPTIONS]
+;;Option             Value
+FLOW_UNITS           CFS
+INFILTRATION         HORTON
+FLOW_ROUTING         DYNWAVE
+LINK_OFFSETS         DEPTH
+MIN_SLOPE            0
+ALLOW_PONDING        NO
+SKIP_STEADY_STATE    NO
+
+START_DATE           01/01/2024
+START_TIME           00:00:00
+REPORT_START_DATE    01/01/2024
+REPORT_START_TIME    00:00:00
+END_DATE             01/01/2024
+END_TIME             02:00:00
+SWEEP_START          01/01
+SWEEP_END            12/31
+DRY_DAYS             0
+REPORT_STEP          00:05:00
+WET_STEP             00:01:00
+DRY_STEP             01:00:00
+ROUTING_STEP         0:00:05 
+RULE_STEP            00:00:00
+
+INERTIAL_DAMPING     PARTIAL
+NORMAL_FLOW_LIMITED  BOTH
+FORCE_MAIN_EQUATION  H-W
+VARIABLE_STEP        0.75
+LENGTHENING_STEP     0
+MIN_SURFAREA         12.557
+MAX_TRIALS           8
+HEAD_TOLERANCE       0.005
+SYS_FLOW_TOL         5
+LAT_FLOW_TOL         5
+MINIMUM_STEP         0.5
+THREADS              1
+
+[EVAPORATION]
+;;Data Source    Parameters
+;;-------------- ----------------
+CONSTANT         0.0
+DRY_ONLY         NO
+
+[RAINGAGES]
+;;Name           Format    Interval SCF      Source    
+;;-------------- --------- ------ ------ ----------
+RG1              INTENSITY 0:05     1.0      TIMESERIES TS_2YR
+
+[SUBCATCHMENTS]
+;;Name           Rain Gage        Outlet           Area     %Imperv  Width    %Slope   CurbLen  SnowPack        
+;;-------------- ---------------- ---------------- -------- -------- -------- -------- -------- ----------------
+S1               RG1              J1               10.0     65       500      1.0      0                        
+S2               RG1              J2               8.0      55       400      1.2      0                        
+S3               RG1              J3               12.0     70       600      0.8      0                        
+
+[SUBAREAS]
+;;Subcatchment   N-Imperv   N-Perv     S-Imperv   S-Perv     PctZero    RouteTo    PctRouted 
+;;-------------- ---------- ---------- ---------- ---------- ---------- ---------- ----------
+S1               0.013      0.24       0.05       0.05       25         OUTLET    
+S2               0.013      0.24       0.05       0.05       25         OUTLET    
+S3               0.013      0.24       0.05       0.05       25         OUTLET    
+
+[INFILTRATION]
+;;Subcatchment   MaxRate    MinRate    Decay      DryTime    MaxInfil  
+;;-------------- ---------- ---------- ---------- ---------- ----------
+S1               3.5        0.5        4          7          0         
+S2               3.5        0.5        4          7          0         
+S3               3.5        0.5        4          7          0         
+
+[JUNCTIONS]
+;;Name           Elevation  MaxDepth   InitDepth  SurDepth   Aponded   
+;;-------------- ---------- ---------- ---------- ---------- ----------
+J1               100.0      8.0        0          0          0         
+J2               98.0       8.0        0          0          0         
+J3               95.0       10.0       0          0          0         
+J4               92.0       10.0       0          0          0         
+
+[OUTFALLS]
+;;Name           Elevation  Type       Stage Data       Gated    Route To        
+;;-------------- ---------- ---------- ---------------- -------- ----------------
+OUT1             90.0       FREE                        NO                       
+
+[CONDUITS]
+;;Name           From Node        To Node          Length     Roughness  InOffset   OutOffset  InitFlow   MaxFlow   
+;;-------------- ---------------- ---------------- ---------- ---------- ---------- ---------- ---------- ----------
+C1               J1               J2               300        0.013      0          0          0          0         
+C2               J2               J3               400        0.013      0          0          0          0         
+C3               J3               J4               350        0.013      0          0          0          0         
+C4               J4               OUT1             250        0.013      0          0          0          0         
+
+[XSECTIONS]
+;;Link           Shape        Geom1            Geom2      Geom3      Geom4      Barrels    Culvert   
+;;-------------- ------------ ---------------- ---------- ---------- ---------- ---------- ----------
+C1               RECT_OPEN    3.0              4.0        0          0          1                    
+C2               RECT_OPEN    3.5              5.0        0          0          1                    
+C3               RECT_OPEN    4.0              5.0        0          0          1                    
+C4               RECT_OPEN    5.0              6.0        0          0          1                    
+
+[TIMESERIES]
+;;Name           Date       Time       Value     
+;;-------------- ---------- ---------- ----------
+TS_2YR                      0:00       0.0       
+TS_2YR                      0:10       0.5       
+TS_2YR                      0:20       1.2       
+TS_2YR                      0:30       2.8       
+TS_2YR                      0:40       4.5       
+TS_2YR                      0:50       6.2       
+TS_2YR                      1:00       3.8       
+TS_2YR                      1:10       2.1       
+TS_2YR                      1:20       1.0       
+TS_2YR                      1:30       0.4       
+TS_2YR                      1:40       0.2       
+TS_2YR                      1:50       0.1       
+TS_2YR                      2:00       0.0       
+
+[REPORT]
+;;Reporting Options
+SUBCATCHMENTS ALL
+NODES ALL
+LINKS ALL
+
+[TAGS]
+
+[MAP]
+DIMENSIONS 0.000 0.000 10000.000 10000.000
+Units      None
+
+[COORDINATES]
+;;Node           X-Coord            Y-Coord           
+;;-------------- ------------------ ------------------
+J1               2000.000           8000.000          
+J2               4000.000           7500.000          
+J3               6000.000           6500.000          
+J4               8000.000           5500.000          
+OUT1             9500.000           5000.000          
+
+[VERTICES]
+;;Link           X-Coord            Y-Coord           
+;;-------------- ------------------ ------------------
+
+[Polygons]
+;;Subcatchment   X-Coord            Y-Coord           
+;;-------------- ------------------ ------------------
+S1               1000.000           9000.000          
+S1               1000.000           7000.000          
+S1               3000.000           7000.000          
+S1               3000.000           9000.000          
+S2               3500.000           8500.000          
+S2               3500.000           6500.000          
+S2               5000.000           6500.000          
+S2               5000.000           8500.000          
+S3               5500.000           7500.000          
+S3               5500.000           5500.000          
+S3               7500.000           5500.000          
+S3               7500.000           7500.000          
+
+[SYMBOLS]
+;;Gage           X-Coord            Y-Coord           
+;;-------------- ------------------ ------------------
+RG1              500.000            9500.000          

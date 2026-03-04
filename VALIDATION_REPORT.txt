@@ -1,0 +1,32 @@
+======================================================================
+VISCOUS VORTEX PARTICLE METHOD - VALIDATION REPORT
+======================================================================
+
+Author: Michael Flynn, P.E. (McGill Associates PA)
+Date: 2025-12-12 17:13:55
+
+
+TEST 1: Lamb-Oseen Vortex Decay
+----------------------------------------------------------------------
+Description: Validates viscous diffusion via PSE
+Status: PASS
+Runtime: 112.6 seconds
+
+
+TEST 2: Wall Vorticity Generation
+----------------------------------------------------------------------
+Description: Validates wall treatment generates vorticity
+Status: PASS
+Runtime: 1219.1 seconds
+
+
+TEST 3: SWMM Integration Test
+----------------------------------------------------------------------
+Description: Validates SWMM boundary condition integration
+Status: PASS
+Runtime: 348.8 seconds
+
+
+======================================================================
+OVERALL: 3/3 tests passed
+======================================================================
