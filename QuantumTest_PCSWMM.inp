@@ -1,0 +1,217 @@
+[TITLE]
+;;Project Title/Notes
+Quantum Hydraulics PCSWMM Test Model
+Designed for testing vortex particle turbulence analysis
+Features: High-velocity junction, confluence, steep channel
+Created: 2026-03-04
+
+[OPTIONS]
+;;Option             Value
+FLOW_UNITS           CFS
+INFILTRATION         HORTON
+FLOW_ROUTING         DYNWAVE
+LINK_OFFSETS         DEPTH
+MIN_SLOPE            0
+ALLOW_PONDING        NO
+SKIP_STEADY_STATE    NO
+
+START_DATE           01/01/2024
+START_TIME           00:00:00
+REPORT_START_DATE    01/01/2024
+REPORT_START_TIME    00:00:00
+END_DATE             01/01/2024
+END_TIME             06:00:00
+SWEEP_START          01/01
+SWEEP_END            12/31
+DRY_DAYS             0
+REPORT_STEP          00:01:00
+WET_STEP             00:01:00
+DRY_STEP             01:00:00
+ROUTING_STEP         0:00:10
+RULE_STEP            00:00:00
+
+INERTIAL_DAMPING     PARTIAL
+NORMAL_FLOW_LIMITED  BOTH
+FORCE_MAIN_EQUATION  H-W
+VARIABLE_STEP        0.75
+LENGTHENING_STEP     0
+MIN_SURFAREA         12.557
+MAX_TRIALS           8
+HEAD_TOLERANCE       0.005
+SYS_FLOW_TOL         5
+LAT_FLOW_TOL         5
+MINIMUM_STEP         0.5
+THREADS              4
+
+[EVAPORATION]
+;;Data Source    Parameters
+CONSTANT         0.0
+DRY_ONLY         NO
+
+[RAINGAGES]
+;;Name           Format    Interval SCF      Source
+RG1              INTENSITY 0:05     1.0      TIMESERIES TS_10YR
+
+[SUBCATCHMENTS]
+;;Name           Rain Gage        Outlet           Area     %Imperv  Width    %Slope   CurbLen  SnowPack
+;; Upper watershed - drains to UPPER_JCT
+S_UPPER1         RG1              UPPER_JCT        15.0     45       600      2.5      0
+S_UPPER2         RG1              UPPER_JCT        12.0     55       500      3.0      0
+;; Side tributary - drains to CONFLUENCE (creates high turbulence)
+S_TRIB1          RG1              TRIB_JCT         8.0      70       350      4.5      0
+S_TRIB2          RG1              TRIB_JCT         6.0      65       300      5.0      0
+;; Lower watershed
+S_LOWER1         RG1              LOWER_JCT        20.0     75       700      1.5      0
+S_LOWER2         RG1              MID_JCT          10.0     60       450      2.0      0
+
+[SUBAREAS]
+;;Subcatchment   N-Imperv   N-Perv     S-Imperv   S-Perv     PctZero    RouteTo    PctRouted
+S_UPPER1         0.012      0.20       0.05       0.10       25         OUTLET
+S_UPPER2         0.012      0.20       0.05       0.10       25         OUTLET
+S_TRIB1          0.011      0.15       0.05       0.08       30         OUTLET
+S_TRIB2          0.011      0.15       0.05       0.08       30         OUTLET
+S_LOWER1         0.013      0.25       0.06       0.12       20         OUTLET
+S_LOWER2         0.013      0.25       0.06       0.12       20         OUTLET
+
+[INFILTRATION]
+;;Subcatchment   MaxRate    MinRate    Decay      DryTime    MaxInfil
+S_UPPER1         3.0        0.5        4          7          0
+S_UPPER2         3.0        0.5        4          7          0
+S_TRIB1          2.5        0.4        4          7          0
+S_TRIB2          2.5        0.4        4          7          0
+S_LOWER1         3.5        0.6        4          7          0
+S_LOWER2         3.5        0.6        4          7          0
+
+[JUNCTIONS]
+;;Name           Elevation  MaxDepth   InitDepth  SurDepth   Aponded
+;; UPPER_JCT: Upper watershed collection point
+UPPER_JCT        120.0      10.0       0          0          0
+;; TRIB_JCT: Side tributary junction (steep, high velocity)
+TRIB_JCT         118.0      8.0        0          0          0
+;; CONFLUENCE: Where main stem meets tributary (HIGH TURBULENCE - key test point)
+CONFLUENCE       105.0      12.0       0          0          0
+;; MID_JCT: Mid-point junction
+MID_JCT          100.0      10.0       0          0          0
+;; LOWER_JCT: Lower junction with additional inflow
+LOWER_JCT        95.0       12.0       0          0          0
+;; OUTLET_JCT: Final junction before outfall
+OUTLET_JCT       91.0       15.0       0          0          0
+
+[OUTFALLS]
+;;Name           Elevation  Type       Stage Data       Gated    Route To
+OUTFALL          88.0       FREE                        NO
+
+[CONDUITS]
+;;Name           From Node        To Node          Length     Roughness  InOffset   OutOffset  InitFlow   MaxFlow
+;; Main stem upper reach
+C_UPPER          UPPER_JCT        CONFLUENCE       500        0.013      0          0          0          0
+;; Steep tributary (high velocity)
+C_TRIB           TRIB_JCT         CONFLUENCE       300        0.015      0          0          0          0
+;; Main stem middle reach
+C_MID1           CONFLUENCE       MID_JCT          400        0.013      0          0          0          0
+;; Main stem lower reaches
+C_MID2           MID_JCT          LOWER_JCT        350        0.013      0          0          0          0
+C_LOWER          LOWER_JCT        OUTLET_JCT       400        0.013      0          0          0          0
+;; Outfall conduit
+C_OUTFALL        OUTLET_JCT       OUTFALL          200        0.012      0          0          0          0
+
+[XSECTIONS]
+;;Link           Shape        Geom1            Geom2      Geom3      Geom4      Barrels    Culvert
+;; Upper reach - moderate channel
+C_UPPER          TRAPEZOIDAL  4.0              12.0       2.0        2.0        1
+;; Tributary - narrow steep channel (high velocity)
+C_TRIB           TRAPEZOIDAL  3.0              8.0        1.5        1.5        1
+;; Main stem channels - progressively wider
+C_MID1           TRAPEZOIDAL  5.0              15.0       2.0        2.0        1
+C_MID2           TRAPEZOIDAL  5.5              16.0       2.0        2.0        1
+C_LOWER          TRAPEZOIDAL  6.0              18.0       2.5        2.5        1
+C_OUTFALL        TRAPEZOIDAL  7.0              20.0       2.5        2.5        1
+
+[TIMESERIES]
+;;Name           Date       Time       Value
+;; 10-year design storm (6-hour duration, peaked)
+TS_10YR                     0:00       0.0
+TS_10YR                     0:15       0.2
+TS_10YR                     0:30       0.5
+TS_10YR                     0:45       1.0
+TS_10YR                     1:00       1.8
+TS_10YR                     1:15       2.5
+TS_10YR                     1:30       3.5
+TS_10YR                     1:45       4.8
+TS_10YR                     2:00       6.5
+TS_10YR                     2:15       8.2
+TS_10YR                     2:30       9.5
+TS_10YR                     2:45       8.0
+TS_10YR                     3:00       6.0
+TS_10YR                     3:15       4.5
+TS_10YR                     3:30       3.2
+TS_10YR                     3:45       2.2
+TS_10YR                     4:00       1.5
+TS_10YR                     4:15       1.0
+TS_10YR                     4:30       0.6
+TS_10YR                     4:45       0.3
+TS_10YR                     5:00       0.1
+TS_10YR                     5:30       0.0
+TS_10YR                     6:00       0.0
+
+[REPORT]
+;;Reporting Options
+SUBCATCHMENTS ALL
+NODES ALL
+LINKS ALL
+
+[TAGS]
+;;Object  Name             Tag
+Node      CONFLUENCE       CRITICAL
+Node      TRIB_JCT         HIGH_VELOCITY
+Node      OUTLET_JCT       MONITOR
+
+[MAP]
+DIMENSIONS 0.000 0.000 10000.000 10000.000
+Units      Feet
+
+[COORDINATES]
+;;Node           X-Coord            Y-Coord
+UPPER_JCT        2000.000           8000.000
+TRIB_JCT         4500.000           9000.000
+CONFLUENCE       4000.000           6500.000
+MID_JCT          5500.000           5000.000
+LOWER_JCT        7000.000           4000.000
+OUTLET_JCT       8500.000           3000.000
+OUTFALL          9500.000           2500.000
+
+[VERTICES]
+;;Link           X-Coord            Y-Coord
+C_UPPER          3000.000           7500.000
+C_TRIB           4300.000           7800.000
+
+[Polygons]
+;;Subcatchment   X-Coord            Y-Coord
+S_UPPER1         500.000            9000.000
+S_UPPER1         500.000            7000.000
+S_UPPER1         2500.000           7000.000
+S_UPPER1         2500.000           9000.000
+S_UPPER2         1000.000           9500.000
+S_UPPER2         1000.000           8000.000
+S_UPPER2         2000.000           8000.000
+S_UPPER2         2000.000           9500.000
+S_TRIB1          4000.000           9500.000
+S_TRIB1          4000.000           8500.000
+S_TRIB1          5500.000           8500.000
+S_TRIB1          5500.000           9500.000
+S_TRIB2          5000.000           9800.000
+S_TRIB2          5000.000           9000.000
+S_TRIB2          6000.000           9000.000
+S_TRIB2          6000.000           9800.000
+S_LOWER1         6500.000           5000.000
+S_LOWER1         6500.000           3000.000
+S_LOWER1         8500.000           3000.000
+S_LOWER1         8500.000           5000.000
+S_LOWER2         5000.000           6000.000
+S_LOWER2         5000.000           4500.000
+S_LOWER2         6500.000           4500.000
+S_LOWER2         6500.000           6000.000
+
+[SYMBOLS]
+;;Gage           X-Coord            Y-Coord
+RG1              500.000            9500.000
