@@ -170,8 +170,10 @@ def run_analysis(model_file=None):
     all_results = []
     timestep_count = 0
     quantum_analyses = 0
-    peak_values = {node_id: {'depth': 0, 'inflow': 0, 'scour_risk': 0, 'velocity': 0}
-                   for node_id in OBSERVATION_ZONES}
+    peak_values = {node_id: {
+        'depth': 0, 'inflow': 0, 'scour_risk': 0, 'velocity': 0,
+        'excess_shear': 0, 'scour_depth': 0, 'shields': 0
+    } for node_id in OBSERVATION_ZONES}
 
     print("\nStarting simulation...")
     print("-" * 50)
@@ -220,6 +222,18 @@ def run_analysis(model_file=None):
                             peak_values[node_id]['velocity'] = max(
                                 peak_values[node_id]['velocity'],
                                 metrics['max_velocity']
+                            )
+                            peak_values[node_id]['excess_shear'] = max(
+                                peak_values[node_id]['excess_shear'],
+                                metrics.get('excess_shear_ratio', 0)
+                            )
+                            peak_values[node_id]['scour_depth'] = max(
+                                peak_values[node_id]['scour_depth'],
+                                metrics.get('scour_depth_potential', 0)
+                            )
+                            peak_values[node_id]['shields'] = max(
+                                peak_values[node_id]['shields'],
+                                metrics.get('shields_parameter', 0)
                             )
 
                             result = {
@@ -294,7 +308,7 @@ def write_summary_report(report_file, results, peak_values, model_file, timestep
     with open(report_file, 'w') as f:
         f.write("=" * 70 + "\n")
         f.write("QUANTUM-ENHANCED HYDRAULIC ANALYSIS REPORT\n")
-        f.write("Vortex Particle Turbulence Simulation\n")
+        f.write("Vortex Particle Turbulence Simulation (Optimized)\n")
         f.write("=" * 70 + "\n\n")
 
         f.write(f"Model: {os.path.basename(model_file)}\n")
@@ -313,21 +327,26 @@ def write_summary_report(report_file, results, peak_values, model_file, timestep
 
             peaks = peak_values[node_id]
             f.write("PEAK CONDITIONS:\n")
-            f.write(f"  Max Depth:       {peaks['depth']:.2f} ft\n")
-            f.write(f"  Max Inflow:      {peaks['inflow']:.1f} cfs\n")
-            f.write(f"  Max Velocity:    {peaks['velocity']:.2f} ft/s\n")
-            f.write(f"  Peak Scour Risk: {peaks['scour_risk']:.3f}\n\n")
+            f.write(f"  Max Depth:          {peaks['depth']:.2f} ft\n")
+            f.write(f"  Max Inflow:         {peaks['inflow']:.1f} cfs\n")
+            f.write(f"  Max Velocity:       {peaks['velocity']:.2f} ft/s\n")
+            f.write(f"  Peak Scour Risk:    {peaks['scour_risk']:.3f}\n")
+            f.write(f"  Excess Shear Ratio: {peaks.get('excess_shear', 0):.2f} (tau/tau_c)\n")
+            f.write(f"  Scour Potential:    {peaks.get('scour_depth', 0):.2f} ft/year\n\n")
 
             f.write("ASSESSMENT:\n")
             risk = peaks['scour_risk']
-            if risk > 0.7:
-                f.write("  *** CRITICAL SCOUR RISK - Protection REQUIRED ***\n")
-            elif risk > 0.5:
-                f.write("  ** HIGH SCOUR RISK - Protection recommended **\n")
-            elif risk > 0.3:
-                f.write("  * MODERATE SCOUR RISK - Monitor conditions *\n")
+            excess = peaks.get('excess_shear', 0)
+            if risk > 0.8:
+                f.write(f"  *** CRITICAL SCOUR RISK - Protection REQUIRED (tau/tau_c={excess:.1f}) ***\n")
+            elif risk > 0.6:
+                f.write(f"  ** HIGH SCOUR RISK - Protection recommended (tau/tau_c={excess:.1f}) **\n")
+            elif risk > 0.4:
+                f.write(f"  * MODERATE SCOUR RISK - Monitor conditions (tau/tau_c={excess:.1f}) *\n")
+            elif risk > 0.2:
+                f.write(f"  LOW-MODERATE SCOUR RISK - Acceptable with monitoring (tau/tau_c={excess:.1f})\n")
             else:
-                f.write("  LOW SCOUR RISK - Acceptable\n")
+                f.write(f"  LOW SCOUR RISK - Acceptable (tau/tau_c={excess:.1f})\n")
 
             vel = peaks['velocity']
             if vel > 15:
@@ -336,6 +355,14 @@ def write_summary_report(report_file, results, peak_values, model_file, timestep
                 f.write("  ** HIGH VELOCITY - Energy dissipation required **\n")
             elif vel > 6:
                 f.write("  * ELEVATED VELOCITY - Consider energy dissipation *\n")
+
+            scour_depth = peaks.get('scour_depth', 0)
+            if scour_depth > 2.0:
+                f.write(f"  *** SEVERE EROSION - {scour_depth:.1f} ft/year scour potential ***\n")
+            elif scour_depth > 1.0:
+                f.write(f"  ** HIGH EROSION - {scour_depth:.1f} ft/year scour potential **\n")
+            elif scour_depth > 0.5:
+                f.write(f"  * MODERATE EROSION - {scour_depth:.1f} ft/year scour potential *\n")
 
             f.write(f"\n  Expected Risk (design): {config['expected_risk']}\n")
             f.write("\n")
@@ -348,28 +375,33 @@ def write_summary_report(report_file, results, peak_values, model_file, timestep
 def print_summary(peak_values):
     """Print summary to console."""
     print("\n" + "=" * 70)
-    print("ANALYSIS SUMMARY")
+    print("ANALYSIS SUMMARY (Optimized Vortex Particle Method)")
     print("=" * 70)
 
     for node_id, config in OBSERVATION_ZONES.items():
         peaks = peak_values[node_id]
         risk = peaks['scour_risk']
+        excess = peaks.get('excess_shear', 0)
 
-        # Determine risk level
-        if risk > 0.7:
+        # Determine risk level using new thresholds
+        if risk > 0.8:
             risk_str = "CRITICAL"
-        elif risk > 0.5:
+        elif risk > 0.6:
             risk_str = "HIGH"
-        elif risk > 0.3:
+        elif risk > 0.4:
             risk_str = "MODERATE"
+        elif risk > 0.2:
+            risk_str = "LOW-MOD"
         else:
             risk_str = "LOW"
 
         print(f"\n{config['name']} ({node_id}):")
-        print(f"  Peak Depth:    {peaks['depth']:.2f} ft")
-        print(f"  Peak Inflow:   {peaks['inflow']:.1f} cfs")
-        print(f"  Peak Velocity: {peaks['velocity']:.2f} ft/s")
-        print(f"  Scour Risk:    {risk:.3f} ({risk_str})")
+        print(f"  Peak Depth:       {peaks['depth']:.2f} ft")
+        print(f"  Peak Inflow:      {peaks['inflow']:.1f} cfs")
+        print(f"  Peak Velocity:    {peaks['velocity']:.2f} ft/s")
+        print(f"  Scour Risk:       {risk:.3f} ({risk_str})")
+        print(f"  Excess Shear:     {excess:.2f}x critical (tau/tau_c)")
+        print(f"  Scour Potential:  {peaks.get('scour_depth', 0):.2f} ft/year")
 
     print("\n" + "=" * 70)
 
