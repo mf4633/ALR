@@ -46,3 +46,7 @@ htmlcov/
 # OS
 .DS_Store
 Thumbs.db
+
+# SWMM output files
+*.out
+*.rpt
