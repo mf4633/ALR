@@ -209,31 +209,33 @@ class SedimentProperties:
     critical_shear_psf: float  # Critical shear stress (psf)
     d50_mm: float              # Median particle diameter (mm)
     density_slugs_ft3: float   # Particle density (slugs/ft3)
+    # Calibrated scour-risk logistic curve parameters (HEC-18 derived)
+    scour_steepness: float = 2.5   # Logistic curve steepness k
+    scour_midpoint: float = 1.0    # Logistic curve midpoint m (excess ratio)
 
-    # Common sediment types
     @classmethod
     def sand(cls) -> 'SedimentProperties':
-        return cls("sand", 0.10, 0.5, 5.14)
+        return cls("sand", 0.10, 0.5, 5.14, scour_steepness=3.0, scour_midpoint=0.8)
 
     @classmethod
     def fine_sand(cls) -> 'SedimentProperties':
-        return cls("fine_sand", 0.06, 0.2, 5.14)
+        return cls("fine_sand", 0.06, 0.2, 5.14, scour_steepness=3.2, scour_midpoint=0.7)
 
     @classmethod
     def coarse_sand(cls) -> 'SedimentProperties':
-        return cls("coarse_sand", 0.15, 1.0, 5.14)
+        return cls("coarse_sand", 0.15, 1.0, 5.14, scour_steepness=2.5, scour_midpoint=1.0)
 
     @classmethod
     def gravel(cls) -> 'SedimentProperties':
-        return cls("gravel", 0.30, 10.0, 5.14)
+        return cls("gravel", 0.30, 10.0, 5.14, scour_steepness=2.0, scour_midpoint=1.2)
 
     @classmethod
     def silt(cls) -> 'SedimentProperties':
-        return cls("silt", 0.08, 0.05, 5.14)
+        return cls("silt", 0.08, 0.05, 5.14, scour_steepness=2.5, scour_midpoint=1.0)
 
     @classmethod
     def clay(cls) -> 'SedimentProperties':
-        return cls("clay", 0.25, 0.002, 5.14)
+        return cls("clay", 0.25, 0.002, 5.14, scour_steepness=1.5, scour_midpoint=1.5)
 
 
 class QuantumNode:
@@ -595,10 +597,10 @@ class QuantumNode:
         rho_s = self.sediment.density_slugs_ft3
         shields = bed_shear_stress / ((rho_s - self.RHO) * self.G * d_ft) if d_ft > 0 else 0.0
 
-        # Non-saturating logistic scour risk function
-        # S-curve centered at tau/tau_c = 1, scaled to give meaningful range
-        # Risk ~0.1 at tau/tau_c = 0.5, ~0.5 at tau/tau_c = 1.0, ~0.9 at tau/tau_c = 2.0
-        scour_risk = 1.0 / (1.0 + np.exp(-2.5 * (excess_ratio - 1.0)))
+        # Calibrated logistic scour risk (sediment-dependent, HEC-18 derived)
+        k = self.sediment.scour_steepness
+        m = self.sediment.scour_midpoint
+        scour_risk = 1.0 / (1.0 + np.exp(-k * (excess_ratio - m)))
 
         return np.clip(scour_risk, 0.0, 1.0), shields, excess_ratio
 

@@ -1,0 +1,187 @@
+[TITLE]
+;;Project Title/Notes
+Quantum Hydraulics - Bridge Pier Scour Test
+50-ft trapezoidal channel with bridge crossing
+4 piers @ 3 ft each = 12 ft obstruction
+Effective bridge opening: 38 ft (rectangular between piers)
+100-year 4-hour storm event
+
+[OPTIONS]
+;;Option             Value
+FLOW_UNITS           CFS
+INFILTRATION         HORTON
+FLOW_ROUTING         DYNWAVE
+LINK_OFFSETS         DEPTH
+MIN_SLOPE            0
+ALLOW_PONDING        NO
+SKIP_STEADY_STATE    NO
+
+START_DATE           01/01/2024
+START_TIME           00:00:00
+REPORT_START_DATE    01/01/2024
+REPORT_START_TIME    00:00:00
+END_DATE             01/01/2024
+END_TIME             04:00:00
+SWEEP_START          01/01
+SWEEP_END            12/31
+DRY_DAYS             0
+REPORT_STEP          00:01:00
+WET_STEP             00:01:00
+DRY_STEP             01:00:00
+ROUTING_STEP         0:00:05
+RULE_STEP            00:00:00
+
+INERTIAL_DAMPING     PARTIAL
+NORMAL_FLOW_LIMITED  BOTH
+FORCE_MAIN_EQUATION  H-W
+VARIABLE_STEP        0.75
+LENGTHENING_STEP     0
+MIN_SURFAREA         12.557
+MAX_TRIALS           8
+HEAD_TOLERANCE        0.005
+SYS_FLOW_TOL         5
+LAT_FLOW_TOL         5
+MINIMUM_STEP         0.5
+THREADS              1
+
+[EVAPORATION]
+;;Data Source    Parameters
+;;-------------- ----------------
+CONSTANT         0.0
+DRY_ONLY         NO
+
+[RAINGAGES]
+;;Name           Format    Interval SCF      Source
+;;-------------- --------- ------ ------ ----------
+RG1              INTENSITY 0:05     1.0      TIMESERIES TS_100YR
+
+[SUBCATCHMENTS]
+;;Name           Rain Gage        Outlet           Area     %Imperv  Width    %Slope   CurbLen  SnowPack
+;;-------------- ---------------- ---------------- -------- -------- -------- -------- -------- --------
+S_MAIN           RG1              J_UP             200.0    45       2000     2.0      0
+S_LOCAL          RG1              J_APPR           50.0     35       800      2.5      0
+
+[SUBAREAS]
+;;Subcatchment   N-Imperv   N-Perv     S-Imperv   S-Perv     PctZero    RouteTo    PctRouted
+;;-------------- ---------- ---------- ---------- ---------- ---------- ---------- ----------
+S_MAIN           0.013      0.24       0.05       0.10       25         OUTLET
+S_LOCAL          0.013      0.24       0.05       0.10       25         OUTLET
+
+[INFILTRATION]
+;;Subcatchment   MaxRate    MinRate    Decay      DryTime    MaxInfil
+;;-------------- ---------- ---------- ---------- ---------- ----------
+S_MAIN           3.0        0.5        4          7          0
+S_LOCAL          3.0        0.5        4          7          0
+
+[JUNCTIONS]
+;;Name           Elevation  MaxDepth   InitDepth  SurDepth   Aponded
+;;-------------- ---------- ---------- ---------- ---------- ----------
+J_UP             110.0      10.0       0          0          0
+J_APPR           108.0      10.0       0          0          0
+J_PIER_US        107.0      10.0       0          0          0
+J_PIER_DS        106.7      10.0       0          0          0
+J_EXIT           105.7      10.0       0          0          0
+J_DOWN           103.7      10.0       0          0          0
+
+[OUTFALLS]
+;;Name           Elevation  Type       Stage Data       Gated    Route To
+;;-------------- ---------- ---------- ---------------- -------- --------
+OUT1             101.7      FREE                        NO
+
+[CONDUITS]
+;;Name           From Node        To Node          Length     Roughness  InOffset   OutOffset  InitFlow   MaxFlow
+;;-------------- ---------------- ---------------- ---------- ---------- ---------- ---------- ---------- ----------
+;; --- Upstream natural channel ---
+C_UP             J_UP             J_APPR           400        0.035      0          0          0          0
+;; --- Approach to bridge ---
+C_APPR           J_APPR           J_PIER_US        200        0.035      0          0          0          0
+;; --- Bridge opening (constricted by 4 piers x 3 ft = 12 ft obstruction) ---
+C_BRIDGE         J_PIER_US        J_PIER_DS        60         0.015      0          0          0          0
+;; --- Exit from bridge ---
+C_EXIT           J_PIER_DS        J_EXIT           200        0.035      0          0          0          0
+;; --- Downstream natural channel ---
+C_DOWN1          J_EXIT           J_DOWN           400        0.035      0          0          0          0
+C_DOWN2          J_DOWN           OUT1             400        0.035      0          0          0          0
+
+[XSECTIONS]
+;;Link           Shape        Geom1            Geom2      Geom3      Geom4      Barrels    Culvert
+;;-------------- ------------ ---------------- ---------- ---------- ---------- ---------- ----------
+;; Natural channel: trapezoidal, 8 ft max depth, 50 ft bottom, 2:1 side slopes
+C_UP             TRAPEZOIDAL  8.0              50.0       2.0        2.0        1
+C_APPR           TRAPEZOIDAL  8.0              50.0       2.0        2.0        1
+;; Bridge opening: rectangular, 8 ft clearance, 38 ft effective width (50 - 4x3 ft piers)
+C_BRIDGE         RECT_OPEN    8.0              38.0       0          0          1
+;; Downstream: same natural channel
+C_EXIT           TRAPEZOIDAL  8.0              50.0       2.0        2.0        1
+C_DOWN1          TRAPEZOIDAL  8.0              50.0       2.0        2.0        1
+C_DOWN2          TRAPEZOIDAL  8.0              50.0       2.0        2.0        1
+
+[TIMESERIES]
+;;Name           Date       Time       Value
+;;-------------- ---------- ---------- ----------
+;; 100-year storm, ~5.5 inches over 4 hours, peak at 1:30
+TS_100YR                    0:00       0.0
+TS_100YR                    0:10       0.1
+TS_100YR                    0:20       0.3
+TS_100YR                    0:30       0.6
+TS_100YR                    0:40       1.0
+TS_100YR                    0:50       1.8
+TS_100YR                    1:00       2.8
+TS_100YR                    1:10       4.0
+TS_100YR                    1:20       5.2
+TS_100YR                    1:30       6.0
+TS_100YR                    1:40       4.5
+TS_100YR                    1:50       2.8
+TS_100YR                    2:00       1.6
+TS_100YR                    2:10       1.0
+TS_100YR                    2:20       0.6
+TS_100YR                    2:30       0.3
+TS_100YR                    2:40       0.2
+TS_100YR                    2:50       0.1
+TS_100YR                    3:00       0.05
+TS_100YR                    3:30       0.0
+TS_100YR                    4:00       0.0
+
+[REPORT]
+;;Reporting Options
+SUBCATCHMENTS ALL
+NODES ALL
+LINKS ALL
+
+[TAGS]
+
+[MAP]
+DIMENSIONS 0.000 0.000 10000.000 10000.000
+Units      None
+
+[COORDINATES]
+;;Node           X-Coord            Y-Coord
+;;-------------- ------------------ ------------------
+J_UP             1000.000           5000.000
+J_APPR           2500.000           5000.000
+J_PIER_US        3500.000           5000.000
+J_PIER_DS        3560.000           5000.000
+J_EXIT           4500.000           5000.000
+J_DOWN           6000.000           5000.000
+OUT1             8000.000           5000.000
+
+[VERTICES]
+;;Link           X-Coord            Y-Coord
+;;-------------- ------------------ ------------------
+
+[Polygons]
+;;Subcatchment   X-Coord            Y-Coord
+;;-------------- ------------------ ------------------
+S_MAIN           500.000            6500.000
+S_MAIN           500.000            3500.000
+S_MAIN           2000.000           3500.000
+S_MAIN           2000.000           6500.000
+S_LOCAL          2200.000           6500.000
+S_LOCAL          2200.000           5200.000
+S_LOCAL          3200.000           5200.000
+S_LOCAL          3200.000           6500.000
+
+[SYMBOLS]
+;;Gage           X-Coord            Y-Coord
+;;-------------- ------------------ ------------------
+RG1              300.000            7000.000

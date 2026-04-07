@@ -86,7 +86,6 @@ if HAS_NUMBA:
         velocities = np.zeros((n, 3), dtype=np.float64)
 
         for i in prange(n):
-            cutoff_sq = (cutoff_multiplier * sigmas[i]) ** 2
             sigma_i_sq = sigmas[i] ** 2
 
             for j in range(n):
@@ -99,16 +98,22 @@ if HAS_NUMBA:
                 rz = positions[j, 2] - positions[i, 2]
                 r_sq = rx * rx + ry * ry + rz * rz
 
+                sigma_j_sq = sigmas[j] ** 2
+
+                # Symmetrized core size: sigma_ij^2 = sigma_i^2 + sigma_j^2
+                # (Barba & Rossi 2005, variable-blob Biot-Savart)
+                sigma_ij_sq = sigma_i_sq + sigma_j_sq
+
+                # Cutoff at max(sigma_i, sigma_j) * multiplier
+                cutoff_sq = cutoff_multiplier ** 2 * max(sigma_i_sq, sigma_j_sq)
                 if r_sq > cutoff_sq:
                     continue
 
-                sigma_j_sq = sigmas[j] ** 2
+                # Regularized kernel with symmetrized sigma
+                denom = (r_sq + sigma_ij_sq) ** 1.5 + 1e-12
 
-                # Regularized kernel: 1 / (r^2 + sigma^2)^(3/2)
-                denom = (r_sq + sigma_j_sq) ** 1.5 + 1e-12
-
-                # Viscous cutoff function
-                cutoff_func = 1.0 - np.exp(-r_sq / sigma_j_sq)
+                # Viscous cutoff function (symmetric)
+                cutoff_func = 1.0 - np.exp(-r_sq / sigma_ij_sq)
 
                 # Biot-Savart kernel
                 K = cutoff_func / (4.0 * np.pi * denom)
@@ -158,8 +163,8 @@ if HAS_NUMBA:
         new_vorticities = np.zeros((n, 3), dtype=np.float64)
 
         for i in prange(n):
-            search_sq = (search_multiplier * sigmas[i]) ** 2
             sigma_i_sq = sigmas[i] ** 2
+            search_sq = (search_multiplier * sigmas[i]) ** 2
 
             # Accumulate weighted vorticity
             weight_sum = 0.0
@@ -174,8 +179,9 @@ if HAS_NUMBA:
                 if r_sq > search_sq:
                     continue
 
-                # PSE diffusion kernel (Gaussian)
-                weight = np.exp(-r_sq / (2.0 * sigma_i_sq))
+                # Symmetrized PSE kernel: use average sigma
+                sigma_avg_sq = 0.5 * (sigma_i_sq + sigmas[j] ** 2)
+                weight = np.exp(-r_sq / (2.0 * sigma_avg_sq))
                 weight_sum += weight
                 omega_avg[0] += weight * vorticities[j, 0]
                 omega_avg[1] += weight * vorticities[j, 1]
@@ -235,13 +241,15 @@ def _compute_velocity_induction_numpy(
 
         r_vecs = pos_neighbors - positions[i]
         r_squared = np.sum(r_vecs ** 2, axis=1, keepdims=True)
-        sigma_squared = sigma_neighbors ** 2
 
-        # Regularized kernel: 1 / (r^2 + sigma^2)^(3/2)
-        denominator = (r_squared + sigma_squared[:, np.newaxis]) ** 1.5 + 1e-12
+        # Symmetrized sigma: sigma_ij^2 = sigma_i^2 + sigma_j^2
+        sigma_ij_sq = sigmas[i] ** 2 + sigma_neighbors ** 2
 
-        # Viscous cutoff function
-        cutoff_func = 1.0 - np.exp(-r_squared / sigma_squared[:, np.newaxis])
+        # Regularized kernel with symmetrized sigma
+        denominator = (r_squared + sigma_ij_sq[:, np.newaxis]) ** 1.5 + 1e-12
+
+        # Viscous cutoff function (symmetric)
+        cutoff_func = 1.0 - np.exp(-r_squared / sigma_ij_sq[:, np.newaxis])
 
         # Biot-Savart kernel
         K = cutoff_func / (4 * np.pi * denominator)
@@ -291,8 +299,9 @@ def _apply_diffusion_numpy(
         dx = neighbor_pos - positions[i]
         r_squared = np.sum(dx ** 2, axis=1)
 
-        # PSE diffusion kernel (Gaussian)
-        weights = np.exp(-r_squared / (2 * sigmas[i] ** 2))
+        # Symmetrized PSE diffusion kernel
+        sigma_avg_sq = 0.5 * (sigmas[i] ** 2 + sigmas[neighbor_indices] ** 2)
+        weights = np.exp(-r_squared / (2 * sigma_avg_sq))
         weight_sum = weights.sum()
 
         if weight_sum < 1e-10:
@@ -358,6 +367,10 @@ class VortexParticleField:
         self.obs_center = np.array([length / 2, hydraulics.width / 2, hydraulics.depth / 2])
         self.obs_radius = 25.0
         self.observation_active = True
+        # Multi-zone support: list of (center_array, radius) tuples
+        self.obs_zones: Optional[list] = None
+        # Optional pier bodies for vortex shedding
+        self.pier_bodies: Optional[list] = None
 
         # Structure-of-Arrays particle storage (OPTIMIZED)
         self.n_particles = n_particles
@@ -455,6 +468,10 @@ class VortexParticleField:
         """
         Compute observation-dependent core sizes for batch of positions.
 
+        Supports multiple observation zones via ``self.obs_zones``.  When set,
+        the enhancement factor is the element-wise *maximum* across all zones
+        (giving the smallest sigma — highest resolution — where any zone applies).
+
         Parameters
         ----------
         positions : np.ndarray
@@ -468,14 +485,20 @@ class VortexParticleField:
         if not self.observation_active:
             return np.full(len(positions), self.base_sigma, dtype=np.float64)
 
-        dx = positions[:, 0] - self.obs_center[0]
-        dy = positions[:, 1] - self.obs_center[1]
-        dz = (positions[:, 2] - self.obs_center[2]) * 0.5  # Weight vertical less
+        # Build zone list: use multi-zone if set, else fall back to single zone
+        zones = self.obs_zones if self.obs_zones is not None else [
+            (self.obs_center, self.obs_radius)
+        ]
 
-        dist = np.sqrt(dx ** 2 + dy ** 2 + dz ** 2)
-
-        # Gaussian-like resolution enhancement near observation
-        enhancement_factor = 1.0 + 4.0 * np.exp(-(dist / self.obs_radius) ** 2)
+        enhancement_factor = np.ones(len(positions), dtype=np.float64)
+        for center, radius in zones:
+            center = np.asarray(center, dtype=np.float64)
+            dx = positions[:, 0] - center[0]
+            dy = positions[:, 1] - center[1]
+            dz = (positions[:, 2] - center[2]) * 0.5  # Weight vertical less
+            dist = np.sqrt(dx ** 2 + dy ** 2 + dz ** 2)
+            zone_enhancement = 1.0 + 4.0 * np.exp(-(dist / radius) ** 2)
+            np.maximum(enhancement_factor, zone_enhancement, out=enhancement_factor)
 
         # Smaller sigma = higher resolution
         sigma_adaptive = self.base_sigma / enhancement_factor
@@ -502,16 +525,22 @@ class VortexParticleField:
         if not self.observation_active:
             return self.base_sigma
 
-        dx = position[0] - self.obs_center[0]
-        dy = position[1] - self.obs_center[1]
-        dz = (position[2] - self.obs_center[2]) * 0.5  # Weight vertical less
-        dist = np.sqrt(dx ** 2 + dy ** 2 + dz ** 2)
+        zones = self.obs_zones if self.obs_zones is not None else [
+            (self.obs_center, self.obs_radius)
+        ]
 
-        # Gaussian-like resolution enhancement near observation
-        enhancement_factor = 1.0 + 4.0 * np.exp(-(dist / self.obs_radius) ** 2)
+        best_enhancement = 1.0
+        for center, radius in zones:
+            center = np.asarray(center, dtype=np.float64)
+            dx = position[0] - center[0]
+            dy = position[1] - center[1]
+            dz = (position[2] - center[2]) * 0.5
+            dist = np.sqrt(dx ** 2 + dy ** 2 + dz ** 2)
+            enhancement = 1.0 + 4.0 * np.exp(-(dist / radius) ** 2)
+            if enhancement > best_enhancement:
+                best_enhancement = enhancement
 
-        # Smaller sigma = higher resolution
-        sigma_adaptive = self.base_sigma / enhancement_factor
+        sigma_adaptive = self.base_sigma / best_enhancement
 
         return np.clip(sigma_adaptive, self.min_sigma, self.max_sigma)
 
@@ -611,6 +640,23 @@ class VortexParticleField:
         # Update core sizes based on observation (vectorized)
         self._sigmas = self._get_adaptive_core_sizes_batch(self._positions)
 
+        # Pier vortex shedding (optional)
+        if self.pier_bodies:
+            V_approach = self.hydraulics.V_mean
+            for pier in self.pier_bodies:
+                # Reflect particles out of pier
+                self._positions = pier.reflect_particles(self._positions)
+                # Shed new particles
+                result = pier.shed_particles(V_approach, self.H, dt)
+                if result is not None:
+                    new_pos, new_omega, new_sig = result
+                    self._positions = np.vstack([self._positions, new_pos])
+                    self._vorticities = np.vstack([self._vorticities, new_omega])
+                    self._sigmas = np.concatenate([self._sigmas, new_sig])
+                    self._ages = np.concatenate([
+                        self._ages, np.zeros(len(new_pos))
+                    ])
+
         # Store trail for visualization
         self._trail_frequency += 1
         if self._trail_frequency % 3 == 0:
@@ -638,6 +684,21 @@ class VortexParticleField:
         """
         self.obs_center = np.asarray(center, dtype=np.float64)
         self.obs_radius = radius
+        self.obs_zones = None  # revert to single-zone mode
+
+    def set_observation_zones(self, zones: list):
+        """
+        Set multiple observation zones.
+
+        Parameters
+        ----------
+        zones : list of (center, radius) tuples
+            Each center is a 3-element array [x, y, z].
+        """
+        self.obs_zones = [
+            (np.asarray(c, dtype=np.float64), float(r)) for c, r in zones
+        ]
+        self.observation_active = True
 
     def toggle_observation(self, active: Optional[bool] = None):
         """

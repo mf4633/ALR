@@ -50,3 +50,11 @@ Thumbs.db
 # SWMM output files
 *.out
 *.rpt
+
+# Generated artifacts (reproducible via runners)
+ALR_figures/
+Benchmark_figures/
+Engineering_figures/
+Sediment_figures/
+*.pdf
+*.docx
