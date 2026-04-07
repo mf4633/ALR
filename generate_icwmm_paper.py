@@ -543,6 +543,18 @@ body(
     indent=True,
 )
 
+doc.add_heading("7.1 Code Availability", level=2)
+body(
+    "The complete ALR Python/Numba source code, including the symmetrized Biot-Savart "
+    "kernel, adaptive-resolution engine, quasi-unsteady sediment transport module, "
+    "PCSWMM post-processor, and all 109 validation tests, is open-source under the MIT "
+    "license and available at https://github.com/mf4633/ALR. The repository includes "
+    "pip install -e . installation, a one-command benchmark runner "
+    "(python run_benchmark_validation.py), and reproducible synthetic test cases that "
+    "match every table and figure in this paper.",
+    indent=True,
+)
+
 # ── REFERENCES ────────────────────────────────────────────────────────────
 
 doc.add_heading("References", level=1)

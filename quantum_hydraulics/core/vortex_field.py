@@ -23,6 +23,12 @@ try:
 except ImportError:
     HAS_NUMBA = False
 
+try:
+    import cupy as cp
+    HAS_CUPY = True
+except ImportError:
+    HAS_CUPY = False
+
 from quantum_hydraulics.core.particle import VortexParticle
 from quantum_hydraulics.core.hydraulics import HydraulicsEngine
 
@@ -221,11 +227,17 @@ def _compute_velocity_induction_numpy(
 
     velocities = np.zeros((n, 3), dtype=np.float64)
 
-    for i in range(n):
-        cutoff = cutoff_multiplier * sigmas[i]
+    # Build tree if not provided and we have enough particles
+    if spatial_tree is None and cKDTree is not None and n > 50:
+        spatial_tree = cKDTree(positions)
 
+    # Global cutoff radius (conservative: use max sigma)
+    max_cutoff = cutoff_multiplier * sigmas.max() if len(sigmas) > 0 else 0
+
+    for i in range(n):
         # Use spatial tree for neighbor search if available
         if spatial_tree is not None:
+            cutoff = cutoff_multiplier * sigmas[i]
             neighbor_indices = spatial_tree.query_ball_point(positions[i], cutoff)
         else:
             neighbor_indices = list(range(n))
