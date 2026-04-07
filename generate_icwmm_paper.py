@@ -5,7 +5,7 @@ Adaptive Lagrangian Refinement for Observation-Dependent
 Hydraulic Simulation Using Vortex Particle Methods
 
 v2: Adds benchmark validation, quasi-unsteady sediment transport,
-    symmetrized Biot-Savart kernel, calibrated scour risk,
+    symmetrized Biot-Savart kernel, calibrated scour severity index,
     Bernoulli free surface correction, and pier vortex shedding.
 """
 
@@ -149,7 +149,7 @@ body(
     "observation-dependent resolution within a vortex particle framework using a "
     "symmetrized Biot-Savart kernel (Barba & Rossi 2010) that preserves circulation. "
     "The underlying hydraulics use Colebrook-White friction rather than Manning's equation, "
-    "with sediment-dependent scour risk parameters (sand: k=3.0, m=0.8; gravel: k=2.0, "
+    "with sediment-dependent scour severity index parameters (sand: k=3.0, m=0.8; gravel: k=2.0, "
     "m=1.2; clay: k=1.5, m=1.5)."
 )
 body(
@@ -191,8 +191,11 @@ body(
     indent=True,
 )
 body(
-    "The paper makes five contributions: (1) a symmetrized variable-blob Biot-Savart "
-    "kernel that preserves circulation; (2) sediment-dependent calibrated scour risk "
+    "This paper focuses on the ALR framework as the primary contribution; scour, "
+    "sediment, and pier models are included to demonstrate practical extensibility "
+    "rather than as finalized predictive tools. "
+    "Specifically, the paper presents: (1) a symmetrized variable-blob Biot-Savart "
+    "kernel that preserves circulation; (2) sediment-dependent calibrated scour severity index "
     "functions; (3) Bernoulli free-surface correction for depth feedback; (4) Strouhal-based "
     "pier vortex shedding; and (5) quasi-unsteady fractional sediment transport with "
     "Hirano armoring. All capabilities are validated against independent published methods.",
@@ -234,9 +237,9 @@ body(
     indent=True,
 )
 
-doc.add_heading("2.4 Sediment-Dependent Scour Risk Function", level=2)
+doc.add_heading("2.4 Sediment-Dependent Scour Severity Index Function", level=2)
 body(
-    "The logistic scour risk function Risk = 1/(1+exp(-k(\u03c4/\u03c4_c - m))) uses "
+    "The logistic scour severity index function Risk = 1/(1+exp(-k(\u03c4/\u03c4_c - m))) uses "
     "sediment-dependent parameters chosen to match HEC-18 scour severity categories. Sand "
     "(k=3.0, m=0.8) produces steeper onset; gravel (k=2.0, m=1.2) resists longer; "
     "clay (k=1.5, m=1.5) reflects cohesive resistance.",
@@ -422,7 +425,7 @@ doc.add_heading("4.3 Engineering Scour", level=2)
 body(
     f"At a synthetic bridge pier, Tier 2 (vortex particles) amplifies bed shear by "
     f"{scour_r.amplification:.2f}\u00d7 relative to Tier 1 (vectorized Colebrook-White). "
-    f"Shields parameter = {scour_r.tier2_shields:.2f}, scour risk = {scour_r.tier2_scour_risk:.2f}.",
+    f"Shields parameter = {scour_r.tier2_shields:.2f}, scour severity index = {scour_r.tier2_scour_risk:.2f}.",
 )
 
 figure("ALR_figures/fig1_sigma_field.png",
@@ -475,12 +478,11 @@ body(
 
 doc.add_heading("6. Discussion", level=1)
 
-doc.add_heading("6.1 Addressing Prior Critique", level=2)
+doc.add_heading("6.1 Validation Development", level=2)
 body(
-    "A prior review identified five critical gaps: (1) no independent validation, "
-    "(2) missing variable-\u03c3 kernel mathematics, (3) misleading energy metric, "
-    "(4) cartoon-level physics, and (5) no computational scaling pathway. "
-    "This version addresses all five:",
+    "During development, five areas were identified for strengthening: (1) independent "
+    "validation, (2) variable-\u03c3 kernel conservation, (3) comparison metrics, "
+    "(4) physics extensibility, and (5) computational scaling. Each has been addressed:",
 )
 body("1. Independent validation: cross-checks against six established methods\u2014Manning, "
      "Shields, Neill, HEC-18 (r=0.605), Laursen (r=0.998), and Melville (1997). "
@@ -492,7 +494,7 @@ body("3. Energy metric: replaced with sigma-independent enstrophy (|\u03c9|\u00b
      "quantities across different \u03c3 distributions.")
 body("4. Physics: added Bernoulli free-surface correction, Strouhal pier vortex shedding, "
      "quasi-unsteady fractional transport with Hirano armoring, and calibrated sediment-dependent "
-     "scour risk functions.")
+     "scour severity index functions.")
 body("5. The existing 6\u03c3 cutoff radius limits Biot-Savart to O(N\u00d7K) where K is the "
      "average neighbor count, not O(N\u00b2). At 500-4000 particles on a standard laptop, "
      "the 200-ft synthetic reach runs in < 1 second.")
@@ -574,7 +576,7 @@ for i, ref in enumerate(refs, 1):
 
 output_path = os.path.join(
     os.path.dirname(os.path.abspath(__file__)),
-    "Flynn_ICWMM_2026_ALR_Paper_FINAL.docx",
+    "Flynn_ICWMM_2026_ALR_Paper_SUBMIT.docx",
 )
 doc.save(output_path)
 print(f"\nPaper saved: {output_path}")
