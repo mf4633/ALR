@@ -206,7 +206,8 @@ For regulatory work, use HEC-RAS, MIKE, or other agency-accepted software.
          Simulation Using Vortex Particle Methods},
   author={Flynn, Michael},
   year={2026},
-  note={McGill Associates, PA. Submitted to ICWMM 2026.}
+  doi={10.5281/zenodo.19462126},
+  note={McGill Associates, PA. Submitted to ASCE Journal of Hydraulic Engineering.}
 }
 ```
 
