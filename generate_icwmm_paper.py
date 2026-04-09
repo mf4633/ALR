@@ -16,9 +16,27 @@ import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from docx import Document
-from docx.shared import Inches, Pt, Cm, RGBColor
+from docx.shared import Inches, Pt, Cm, RGBColor, Twips
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.enum.table import WD_TABLE_ALIGNMENT
+from docx.oxml.ns import qn
+from lxml import etree
+import latex2mathml.converter
+import copy
+
+# ── OMML equation support ────────────────────────────────────────────────
+
+_xslt = etree.parse(r"C:\Program Files\Microsoft Office\root\Office16\MML2OMML.XSL")
+_omml_transform = etree.XSLT(_xslt)
+
+def _latex_to_omml(latex_str):
+    """Convert a LaTeX string to an OMML <m:oMath> element."""
+    mathml = latex2mathml.converter.convert(latex_str)
+    tree = etree.fromstring(mathml.encode())
+    omml = _omml_transform(tree)
+    return omml.getroot()
+
+_EQ_NUM = [0]  # mutable counter for equation numbering
 
 # ── Run experiments ───────────────────────────────────────────────────────
 
@@ -35,6 +53,48 @@ cost = run_cost_benefit()
 sigma = run_sigma_field()
 scour_r = run_scour()
 multi = run_multi_zone()
+
+# Baseline timing with JIT warmup for stable speedup measurement
+import time as _time
+from quantum_hydraulics.research.alr_experiments import (
+    _create_engine, _run_field, VortexParticleField,
+)
+
+# Warmup: one throwaway run to compile all Numba kernels
+print("  JIT warmup...")
+np.random.seed(42)
+_eng = _create_engine()
+_vf_warmup = VortexParticleField(_eng, length=CHANNEL_LENGTH, n_particles=200)
+_vf_warmup.set_observation(OBS_CENTER, 25.0)
+_run_field(_vf_warmup)
+
+# Timed baseline (6000 uniform) — median of 3
+_base_times = []
+for _ in range(3):
+    np.random.seed(42)
+    _eng = _create_engine()
+    _t0 = _time.perf_counter()
+    _vf_base = VortexParticleField(_eng, length=CHANNEL_LENGTH, n_particles=6000)
+    _vf_base.toggle_observation(False)
+    _vf_base._sigmas[:] = _vf_base.min_sigma
+    _run_field(_vf_base)
+    _base_times.append(_time.perf_counter() - _t0)
+baseline_wall = sorted(_base_times)[1]
+
+# Timed ALR-500 — median of 3
+_alr_times = []
+for _ in range(3):
+    np.random.seed(42)
+    _eng = _create_engine()
+    _t0 = _time.perf_counter()
+    _vf_alr = VortexParticleField(_eng, length=CHANNEL_LENGTH, n_particles=500)
+    _vf_alr.set_observation(OBS_CENTER, 25.0)
+    _run_field(_vf_alr)
+    _alr_times.append(_time.perf_counter() - _t0)
+alr_wall = sorted(_alr_times)[1]
+
+speedup = baseline_wall / alr_wall
+print(f"  Speedup: {baseline_wall:.3f}s (baseline) / {alr_wall:.3f}s (ALR-500) = {speedup:.0f}x")
 
 # Sediment transport
 from quantum_hydraulics.research.sediment_scenarios import generate_clearwater_scour_scenario
@@ -129,6 +189,88 @@ def figure(path, cap, width=5.5):
     p.paragraph_format.space_after = Pt(12)
 
 
+class Math:
+    """Marker for inline LaTeX within body_math() segment lists."""
+    def __init__(self, latex):
+        self.latex = latex
+
+
+def body_math(segments, indent=False):
+    """Create a body paragraph with mixed text and inline OMML equations.
+
+    segments: list of str (plain text) and Math() objects (LaTeX).
+    """
+    p = doc.add_paragraph()
+    if indent:
+        p.paragraph_format.first_line_indent = Cm(1.27)
+    for seg in segments:
+        if isinstance(seg, Math):
+            omml = _latex_to_omml(seg.latex)
+            p._element.append(omml)
+        else:
+            r = p.add_run(seg)
+            r.font.name = "Times New Roman"
+            r.font.size = Pt(11)
+    return p
+
+
+def display_eq(latex_str, numbered=True):
+    """Add a display equation, centered, with flush-right number per TRB style.
+
+    Uses a three-column table (invisible borders) to get:
+      [empty] [equation centered] [(N) right-aligned]
+    """
+    if numbered:
+        _EQ_NUM[0] += 1
+
+    # Use a 1-row, 3-col table for layout: blank | equation | number
+    t = doc.add_table(rows=1, cols=3)
+    t.alignment = WD_TABLE_ALIGNMENT.CENTER
+    # Remove all borders
+    tbl = t._tbl
+    tblPr = tbl.tblPr if tbl.tblPr is not None else etree.SubElement(tbl, qn('w:tblPr'))
+    borders = etree.SubElement(tblPr, qn('w:tblBorders'))
+    for edge in ('top', 'left', 'bottom', 'right', 'insideH', 'insideV'):
+        e = etree.SubElement(borders, qn(f'w:{edge}'))
+        e.set(qn('w:val'), 'none')
+        e.set(qn('w:sz'), '0')
+        e.set(qn('w:space'), '0')
+
+    # Set column widths: narrow | wide | narrow
+    total = 9026  # ~6.27 inches in twips (standard page width minus margins)
+    widths = [int(total * 0.15), int(total * 0.70), int(total * 0.15)]
+    tblGrid = tbl.find(qn('w:tblGrid'))
+    if tblGrid is None:
+        tblGrid = etree.SubElement(tbl, qn('w:tblGrid'))
+    for gc in tblGrid.findall(qn('w:gridCol')):
+        tblGrid.remove(gc)
+    for w in widths:
+        gc = etree.SubElement(tblGrid, qn('w:gridCol'))
+        gc.set(qn('w:w'), str(w))
+
+    # Col 0: empty
+    c0 = t.rows[0].cells[0]
+    c0.paragraphs[0].text = ""
+
+    # Col 1: equation (centered)
+    c1 = t.rows[0].cells[1]
+    p_eq = c1.paragraphs[0]
+    p_eq.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    omml = _latex_to_omml(latex_str)
+    p_eq._element.append(omml)
+
+    # Col 2: equation number (right-aligned)
+    c2 = t.rows[0].cells[2]
+    p_num = c2.paragraphs[0]
+    p_num.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+    if numbered:
+        r = p_num.add_run(f"({_EQ_NUM[0]})")
+        r.font.name = "Times New Roman"
+        r.font.size = Pt(11)
+
+    return t
+
+
 # ══════════════════════════════════════════════════════════════════════════
 # PAPER CONTENT
 # ══════════════════════════════════════════════════════════════════════════
@@ -136,7 +278,7 @@ def figure(path, cap, width=5.5):
 centered("Adaptive Lagrangian Refinement for Observation-Dependent\n"
          "Hydraulic Simulation Using Vortex Particle Methods", size=16, bold=True, after=12)
 centered("Michael Flynn, PE", size=12, bold=True, after=2)
-centered("McGill Associates, PA\nAsheville, North Carolina", size=11, after=18)
+centered("Independent Researcher\nAsheville, North Carolina", size=11, after=18)
 
 # ── ABSTRACT ──────────────────────────────────────────────────────────────
 
@@ -148,9 +290,14 @@ body(
     "without the prohibitive cost of uniform high-resolution computation. ALR employs "
     "observation-dependent resolution within a vortex particle framework using a "
     "symmetrized Biot-Savart kernel (Barba & Rossi 2010) that preserves circulation. "
-    "The underlying hydraulics use Colebrook-White friction rather than Manning's equation, "
+    "The underlying hydraulics use Colebrook-White friction rather than Manning\u2019s equation, "
     "with sediment-dependent scour severity index parameters (sand: k=3.0, m=0.8; gravel: k=2.0, "
-    "m=1.2; clay: k=1.5, m=1.5)."
+    "m=1.2; clay: k=1.5, m=1.5). "
+    f"The method is validated against six established methods\u2014HEC-18 CSU pier scour "
+    f"(r = 0.605), Laursen live-bed contraction scour (r = 0.998), Melville (1997) "
+    f"dimensionless design curve, Manning\u2019s equation, Shields criterion, and Neill "
+    f"critical velocity\u2014and reduces a 6,000-particle simulation to 500 particles "
+    f"({cost.errors_vorticity[1]:.2%} vorticity error) with circulation conserved to 0.03%."
 )
 body(
     "The method is validated through five controlled ALR experiments plus cross-checks "
@@ -207,11 +354,19 @@ body(
 doc.add_heading("2. Methodology", level=1)
 
 doc.add_heading("2.1 Hydraulic Engine", level=2)
+body_math(
+    ["The engine computes flow properties from the Colebrook-White equation rather than "
+     "Manning\u2019s. Friction velocity "],
+    indent=True,
+)
+display_eq(r"u_* = V \sqrt{\frac{f}{8}}")
+body_math(
+    ["Bed shear stress:"],
+)
+display_eq(r"\tau = \rho \, u_*^2")
 body(
-    "The engine computes flow properties from the Colebrook-White equation rather than "
-    "Manning's. Friction velocity u* = V\u221a(f/8), bed shear \u03c4 = \u03c1u*\u00b2. "
     "Velocity profiles follow the log-law in the inner layer and 1/7th power law in the "
-    "outer layer. Cross-validation against Manning's across five channel types shows "
+    "outer layer. Cross-validation against Manning\u2019s across five channel types shows "
     "25.5% average velocity difference\u2014consistent with the known Strickler n-to-ks "
     "conversion offset (Table 1).",
     indent=True,
@@ -221,47 +376,64 @@ doc.add_heading("2.2 Symmetrized Vortex Particle Method", level=2)
 body(
     "Particles carry 3D vorticity vectors in a Structure-of-Arrays layout. The velocity "
     "field is computed via the Biot-Savart integral using a symmetrized regularized "
-    "kernel (Barba & Rossi 2010): \u03c3_ij\u00b2 = \u03c3_i\u00b2 + \u03c3_j\u00b2, "
+    "kernel (Barba & Rossi 2010):",
+    indent=True,
+)
+display_eq(r"\sigma_{ij}^2 = \sigma_i^2 + \sigma_j^2")
+body(
     "ensuring momentum conservation when core sizes vary. Viscous diffusion uses "
     "symmetrized Particle Strength Exchange (PSE). Circulation conservation was verified "
     "at 0.03% drift over 30-step simulations.",
-    indent=True,
 )
 
 doc.add_heading("2.3 Observation-Dependent Resolution", level=2)
-body(
-    "Each particle's core size \u03c3 adapts based on distance from observation zones: "
-    "\u03c3 = \u03c3_base / (1 + 4 exp(-(d/r_obs)\u00b2)). This produces 5\u00d7 resolution "
-    "at the observation center. Multiple zones are supported; the maximum enhancement "
-    "across all zones determines the local \u03c3.",
+body_math(
+    ["Each particle\u2019s core size ", Math(r"\sigma"),
+     " adapts based on distance from observation zones:"],
     indent=True,
+)
+display_eq(r"\sigma = \frac{\sigma_{base}}{1 + 4 \exp\bigl({-}\bigl(\frac{d}{r_{obs}}\bigr)^{2}\bigr)}")
+body_math(
+    ["This produces 5\u00d7 resolution at the observation center. Multiple zones are "
+     "supported; the maximum enhancement across all zones determines the local ",
+     Math(r"\sigma"), "."],
 )
 
 doc.add_heading("2.4 Sediment-Dependent Scour Severity Index Function", level=2)
 body(
-    "The logistic scour severity index function Risk = 1/(1+exp(-k(\u03c4/\u03c4_c - m))) uses "
-    "sediment-dependent parameters chosen to match HEC-18 scour severity categories. Sand "
-    "(k=3.0, m=0.8) produces steeper onset; gravel (k=2.0, m=1.2) resists longer; "
-    "clay (k=1.5, m=1.5) reflects cohesive resistance.",
+    "The logistic scour severity index function:",
     indent=True,
+)
+display_eq(r"\mathrm{Risk} = \frac{1}{1 + \exp\bigl({-}k\bigl(\frac{\tau}{\tau_c} {-} m\bigr)\bigr)}")
+body_math(
+    ["uses sediment-dependent parameters chosen to match HEC-18 scour severity categories. Sand "
+     "(", Math(r"k=3.0"), ", ", Math(r"m=0.8"),
+     ") produces steeper onset; gravel (", Math(r"k=2.0"), ", ", Math(r"m=1.2"),
+     ") resists longer; clay (", Math(r"k=1.5"), ", ", Math(r"m=1.5"),
+     ") reflects cohesive resistance."],
 )
 
 doc.add_heading("2.5 Pier Vortex Shedding", level=2)
-body(
-    "Pier boundary conditions are modeled by injecting vortex particles at the Strouhal "
-    "frequency (St=0.2): surface particles at the downstream separation zone with "
-    "alternating-sign vorticity (\u03b3 = -V_approach), plus horseshoe vortex particles "
-    "at the pier base. Particles inside the pier are reflected outward.",
+body_math(
+    ["Pier boundary conditions are modeled by injecting vortex particles at the Strouhal "
+     "frequency (", Math(r"St = 0.2"),
+     "): surface particles at the downstream separation zone with "
+     "alternating-sign vorticity (", Math(r"\gamma = -V_{approach}"),
+     "), plus horseshoe vortex particles "
+     "at the pier base. Particles inside the pier are reflected outward."],
     indent=True,
 )
 
 doc.add_heading("2.6 Bernoulli Free Surface Correction", level=2)
 body(
-    "A post-processing Bernoulli correction computes local water surface elevation: "
-    "\u03b7 = y_approach + (V_approach\u00b2 - V(x,y)\u00b2)/(2g). Corrected depths "
-    "feed back to Colebrook-White friction and bed shear. Validated analytically: "
-    "constriction drawdown matches (V\u2081\u00b2-V\u2082\u00b2)/(2g) exactly.",
+    "A post-processing Bernoulli correction computes local water surface elevation:",
     indent=True,
+)
+display_eq(r"\eta = y_{approach} + \frac{V_{approach}^2 - V(x,y)^2}{2g}")
+body_math(
+    ["Corrected depths feed back to Colebrook-White friction and bed shear. Validated "
+     "analytically: constriction drawdown matches ",
+     Math(r"\frac{V_1^2 - V_2^2}{2g}"), " exactly."],
 )
 
 doc.add_heading("2.7 Quasi-Unsteady Sediment Transport", level=2)
@@ -270,10 +442,10 @@ body(
     "fractional bedload transport per grain class (Meyer-Peter M\u00fcller) with "
     "Egiazaroff hiding/exposure correction. The Hirano (1971) active-layer model "
     "tracks surface gradation: as fines are transported, the surface coarsens, forming "
-    "an armor layer. The Exner equation provides morphodynamic feedback: "
-    "dz/dt = (q_in - q_out)/((1-p)W).",
+    "an armor layer. The Exner equation provides morphodynamic feedback:",
     indent=True,
 )
+display_eq(r"\frac{\partial z}{\partial t} = \frac{q_{in} - q_{out}}{(1-p)\,W}")
 
 # ── 3. BENCHMARK VALIDATION ──────────────────────────────────────────────
 
@@ -307,11 +479,12 @@ table(
 )
 
 doc.add_heading("3.2 HEC-18 Pier Scour Correlation", level=2)
-body(
-    "QH shear amplification was compared against HEC-18 CSU pier scour depth across "
-    "five pier configurations. The Pearson correlation r = 0.605 confirms that QH detects "
-    "the same severity trends as HEC-18. All five cases where HEC-18 predicts significant "
-    "scour (> 1 ft) are detected by QH (amplification > 1.0).",
+body_math(
+    ["QH shear amplification was compared against HEC-18 CSU pier scour depth across "
+     "five pier configurations. The Pearson correlation ", Math(r"r = 0.605"),
+     " confirms that QH detects "
+     "the same severity trends as HEC-18. All five cases where HEC-18 predicts significant "
+     "scour (> 1 ft) are detected by QH (amplification > 1.0)."],
     indent=True,
 )
 
@@ -332,11 +505,13 @@ figure("Benchmark_figures/fig1_hec18_correlation.png",
        width=4.5)
 
 doc.add_heading("3.3 Laursen Contraction Scour", level=2)
-body(
-    "Contraction shear amplification was compared against Laursen live-bed scour across "
-    "five width ratios (0.9 to 0.5). The correlation is r = 0.998. At 50% contraction, "
-    "QH predicts 3.3\u00d7 shear amplification (theoretical V\u00b2 scaling predicts 4\u00d7; "
-    "the difference reflects Colebrook-White friction factor variation with Reynolds number).",
+body_math(
+    ["Contraction shear amplification was compared against Laursen live-bed scour across "
+     "five width ratios (0.9 to 0.5). The correlation is ", Math(r"r = 0.998"),
+     ". At 50% contraction, "
+     "QH predicts 3.3\u00d7 shear amplification (theoretical ", Math(r"V^2"),
+     " scaling predicts 4\u00d7; "
+     "the difference reflects Colebrook-White friction factor variation with Reynolds number)."],
     indent=True,
 )
 
@@ -345,13 +520,19 @@ figure("Benchmark_figures/fig2_contraction_validation.png",
        width=5.5)
 
 doc.add_heading("3.4 Melville Design Curve Comparison", level=2)
-body(
-    "The Melville (1997) dimensionless design equation provides an independent, "
-    "empirically-derived relationship between flow intensity (V/Vc) and scour depth: "
-    "ds/b = 2.4 K_I, where K_I = V/Vc for clear-water conditions (V/Vc \u2264 1). "
-    "This was compared against QH\u2019s turbulence amplification factor across a range "
-    "of V/Vc from 0.3 to 1.5 for a 3-ft circular pier in deep water (y/b > 2.6).",
+body_math(
+    ["The Melville (1997) dimensionless design equation provides an independent, "
+     "empirically-derived relationship between flow intensity (", Math(r"V/V_c"),
+     ") and scour depth:"],
     indent=True,
+)
+display_eq(r"\frac{d_s}{b} = 2.4\, K_I")
+body_math(
+    ["where ", Math(r"K_I = V/V_c"), " for clear-water conditions (",
+     Math(r"V/V_c \leq 1"),
+     "). This was compared against QH\u2019s turbulence amplification factor across a range "
+     "of ", Math(r"V/V_c"), " from 0.3 to 1.5 for a 3-ft circular pier in deep water (",
+     Math(r"y/b > 2.6"), ")."],
 )
 
 table(
@@ -366,19 +547,22 @@ table(
     "Table 3. Melville (1997) design curve vs QH amplification (b = 3 ft, y/b = 3.3).",
 )
 
-body(
-    "For this configuration (3-ft pier in a 40-ft channel, blockage ratio 0.075), "
-    "QH provides a consistent constriction-based shear amplification of ~1.11\u00d7, "
-    "independent of flow intensity (Table 3). The Tier 2 vortex particle analysis "
-    "in Section 4.3 yields a higher amplification (1.44\u00d7) because it additionally "
-    "captures turbulence-induced Reynolds stresses via Biot-Savart induction, not just "
-    "geometric blockage. QH measures the "
-    "geometric blockage effect (pier width / channel width), while Melville\u2019s K_I "
-    "captures the flow-intensity dependence. The two factors are complementary\u2014"
-    "QH augments the Melville baseline, it does not replace it. A PE would use both: "
-    "ds = 2.4 b K_I \u00d7 QH_amplification, combining the empirical scour depth with "
-    "a physics-based turbulence correction.",
+body_math(
+    ["For this configuration (3-ft pier in a 40-ft channel, blockage ratio 0.075), "
+     "QH provides a consistent constriction-based shear amplification of ~1.11\u00d7, "
+     "independent of flow intensity (Table 3). The Tier 2 vortex particle analysis "
+     "in Section 4.3 yields a higher amplification (1.44\u00d7) because it additionally "
+     "captures turbulence-induced Reynolds stresses via Biot-Savart induction, not just "
+     "geometric blockage. QH measures the "
+     "geometric blockage effect (pier width / channel width), while Melville\u2019s ",
+     Math(r"K_I"),
+     " captures the flow-intensity dependence. The two factors are complementary\u2014"
+     "QH augments the Melville baseline, it does not replace it. A PE would use both:"],
     indent=True,
+)
+display_eq(r"d_s = 2.4\, b\, K_I \times \mathrm{QH}_{amplification}")
+body(
+    "combining the empirical scour depth with a physics-based turbulence correction.",
 )
 
 figure("Benchmark_figures/fig3_melville_design_curve.png",
@@ -414,11 +598,38 @@ table(
     "Table 4. Convergence of ALR metrics with observation radius.",
 )
 
-doc.add_heading("4.2 Cost-Benefit", level=2)
+doc.add_heading("4.2 Computational Performance", level=2)
 body(
-    f"ALR at 500 particles achieves {cost.errors_vorticity[1]:.1%} vorticity error "
-    f"relative to a 6,000-particle uniform baseline\u2014a 12\u00d7 particle reduction. "
-    f"Wall time scales from {cost.wall_times[0]:.2f}s to {cost.wall_times[-1]:.2f}s.",
+    f"The primary advantage of ALR is computational speed. A uniform high-resolution "
+    f"simulation requires 6,000 particles and {baseline_wall:.2f} s of wall time. "
+    f"ALR achieves equivalent accuracy at the observation zone with far fewer particles "
+    f"by allocating resolution only where needed (Table 5).",
+    indent=True,
+)
+
+table(
+    ["Particles", "Wall Time (s)", "Speedup", "Vorticity Error"],
+    [
+        ["6,000 (uniform)", f"{baseline_wall:.3f}", "1\u00d7 (baseline)", "\u2014"],
+    ] + [
+        [f"{cost.particle_counts[i]:,d} (ALR)",
+         f"{cost.wall_times[i]:.3f}",
+         f"{baseline_wall / cost.wall_times[i]:.0f}\u00d7",
+         f"{cost.errors_vorticity[i]:.2%}"]
+        for i in range(len(cost.particle_counts))
+    ],
+    "Table 5. Computational performance: ALR vs uniform resolution.",
+)
+
+body(
+    f"At the optimal operating point of 500 ALR particles, the method achieves a "
+    f"{speedup:.0f}\u00d7 wall-time speedup with only {cost.errors_vorticity[1]:.2%} "
+    f"vorticity error relative to the 6,000-particle baseline. "
+    f"The speedup exceeds the 12\u00d7 particle reduction ratio because Biot-Savart "
+    f"velocity evaluation scales as O(N\u00b2) for uniform distributions; ALR\u2019s "
+    f"6\u03c3 cutoff radius reduces this to O(N\u00d7K) where K is the average neighbor "
+    f"count, and larger core sizes in coarse zones further reduce K.",
+    indent=True,
 )
 
 doc.add_heading("4.3 Engineering Scour", level=2)
@@ -454,7 +665,7 @@ table(
         ["Armor Formed", "Yes" if sed_sim.armored else "No"],
         ["Assessment", sed_sim.get_assessment()],
     ],
-    "Table 5. Quasi-unsteady sediment transport results.",
+    "Table 6. Quasi-unsteady sediment transport results.",
 )
 
 figure("Sediment_figures/fig2_d50_evolution.png",
@@ -465,12 +676,12 @@ figure("Sediment_figures/fig3_cumulative_scour.png",
        "Figure 6. Cumulative bed change showing rapid degradation during flood flows.",
        width=5.5)
 
-body(
-    "The surface coarsened from d50 = 0.80 mm (medium sand) to 7.2 mm (fine gravel)\u2014"
-    "a 9\u00d7 increase. The Hirano active-layer model correctly depleted fine fractions, "
-    "leaving a gravel armor that limited further transport. This self-limiting behavior "
-    "is the primary physical mechanism controlling long-term degradation below dams "
-    "and is consistent with field observations (Williams & Wolman 1984).",
+body_math(
+    ["The surface coarsened from ", Math(r"d_{50} = 0.80"), " mm (medium sand) to 7.2 mm (fine gravel)\u2014"
+     "a 9\u00d7 increase. The Hirano active-layer model correctly depleted fine fractions, "
+     "leaving a gravel armor that limited further transport. This self-limiting behavior "
+     "is the primary physical mechanism controlling long-term degradation below dams "
+     "and is consistent with field observations (Williams & Wolman 1984)."],
     indent=True,
 )
 
@@ -479,25 +690,41 @@ body(
 doc.add_heading("6. Discussion", level=1)
 
 doc.add_heading("6.1 Validation Development", level=2)
-body(
-    "During development, five areas were identified for strengthening: (1) independent "
-    "validation, (2) variable-\u03c3 kernel conservation, (3) comparison metrics, "
-    "(4) physics extensibility, and (5) computational scaling. Each has been addressed:",
+body_math(
+    ["During development, five areas were identified for strengthening: (1) independent "
+     "validation, (2) variable-", Math(r"\sigma"),
+     " kernel conservation, (3) comparison metrics, "
+     "(4) physics extensibility, and (5) computational scaling. Each has been addressed:"],
 )
-body("1. Independent validation: cross-checks against six established methods\u2014Manning, "
-     "Shields, Neill, HEC-18 (r=0.605), Laursen (r=0.998), and Melville (1997). "
-     "QH provides a complementary turbulence amplification that augments these methods.")
-body("2. Kernel mathematics: symmetrized \u03c3_ij\u00b2 = \u03c3_i\u00b2 + \u03c3_j\u00b2 "
-     "(Barba & Rossi 2010). Circulation conservation verified at 0.03% drift.")
-body("3. Energy metric: replaced with sigma-independent enstrophy (|\u03c9|\u00b2). "
-     "The prior ~97% 'energy error' was an artifact of comparing \u03c3\u00b3-dependent "
-     "quantities across different \u03c3 distributions.")
-body("4. Physics: added Bernoulli free-surface correction, Strouhal pier vortex shedding, "
-     "quasi-unsteady fractional transport with Hirano armoring, and calibrated sediment-dependent "
-     "scour severity index functions.")
-body("5. The existing 6\u03c3 cutoff radius limits Biot-Savart to O(N\u00d7K) where K is the "
-     "average neighbor count, not O(N\u00b2). At 500-4000 particles on a standard laptop, "
-     "the 200-ft synthetic reach runs in < 1 second.")
+body_math(
+    ["1. Independent validation: cross-checks against six established methods\u2014Manning, "
+     "Shields, Neill, HEC-18 (", Math(r"r = 0.605"), "), Laursen (", Math(r"r = 0.998"),
+     "), and Melville (1997). "
+     "QH provides a complementary turbulence amplification that augments these methods."],
+)
+body_math(
+    ["2. Kernel mathematics: symmetrized ", Math(r"\sigma_{ij}^2 = \sigma_i^2 + \sigma_j^2"),
+     " (Barba & Rossi 2010). Circulation conservation verified at 0.03% drift."],
+)
+body_math(
+    ["3. Energy metric: replaced with sigma-independent enstrophy (",
+     Math(r"|\omega|^2"),
+     "). The prior ~97% \u2018energy error\u2019 was an artifact of comparing ",
+     Math(r"\sigma^3"), "-dependent "
+     "quantities across different ", Math(r"\sigma"), " distributions."],
+)
+body(
+    "4. Physics: added Bernoulli free-surface correction, Strouhal pier vortex shedding, "
+    "quasi-unsteady fractional transport with Hirano armoring, and calibrated sediment-dependent "
+    "scour severity index functions.",
+)
+body_math(
+    ["5. The existing ", Math(r"6\sigma"),
+     " cutoff radius limits Biot-Savart to ", Math(r"O(N \times K)"),
+     " where K is the average neighbor count, not ", Math(r"O(N^2)"),
+     ". At 500\u20134000 particles on a standard laptop, "
+     "the 200-ft synthetic reach runs in < 1 second."],
+)
 
 doc.add_heading("6.2 Remaining Limitations", level=2)
 body(
@@ -522,14 +749,15 @@ conclusions = [
     f"physically consistent trends (Laursen contraction r = 0.998, HEC-18 pier scour "
     f"r = 0.605). QH provides a complementary turbulence amplification factor that "
     f"augments\u2014rather than replaces\u2014established empirical methods.",
-    f"ALR achieves {cost.errors_vorticity[1]:.1%} vorticity error at 500 particles\u2014"
-    f"a 12\u00d7 reduction from the 6,000-particle uniform baseline\u2014with "
-    f"circulation conserved to 0.03% via the symmetrized Biot-Savart kernel.",
+    f"ALR reduces a 6,000-particle uniform simulation to 500 particles with "
+    f"{cost.errors_vorticity[1]:.2%} vorticity error and circulation conserved to 0.03% "
+    f"via the symmetrized Biot-Savart kernel, achieving a {speedup:.0f}\u00d7 "
+    f"wall-time reduction.",
     f"Quasi-unsteady sediment transport with Hirano armoring produces 10.6 ft of "
     f"clear-water scour with 9\u00d7 surface coarsening\u2014physically consistent behavior "
     f"for a dam-release scenario on sand-gravel bed (Williams & Wolman 1984).",
     f"The method integrates with PCSWMM as a post-processor requiring no additional "
-    f"meshing or CFD software, filling the gap between Manning's n + HEC-18 correction "
+    f"meshing or CFD software, filling the gap between Manning\u2019s n + HEC-18 correction "
     f"factors and full 3D CFD for routine scour screening.",
 ]
 for i, c in enumerate(conclusions, 1):
@@ -588,7 +816,7 @@ for i, ref in enumerate(refs, 1):
 
 output_path = os.path.join(
     os.path.dirname(os.path.abspath(__file__)),
-    "Flynn_ICWMM_2026_ALR_Paper_SUBMIT.docx",
+    "Flynn_ASCE_2026_ALR_Paper_REV1.docx",
 )
 doc.save(output_path)
 print(f"\nPaper saved: {output_path}")
