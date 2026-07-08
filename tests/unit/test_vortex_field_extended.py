@@ -84,6 +84,7 @@ class TestComputeVelocityInduction:
         field._positions = np.array([[10.0, 15.0, 2.5], [10.0, 15.0, 3.5]])
         field._vorticities = np.array([[1.0, 0.0, 0.0], [1.0, 0.0, 0.0]])
         field._sigmas = np.array([0.5, 0.5])
+        field._volumes = np.array([1.0, 1.0])
 
         velocities = field.compute_velocity_induction()
         # z-component of velocity should be opposite for symmetric vortex pair
@@ -318,3 +319,61 @@ class TestOverlapDiagnostic:
         # Exterior is well overlapped (~1); interior is under-resolved (>~2)
         assert r_out < 1.6
         assert r_in > r_out
+
+
+# =============================================================================
+# TestPerParticleVolume
+# =============================================================================
+
+class TestPerParticleVolume:
+    """Phase 2: per-particle volume element (strength = omega * Vol)."""
+
+    def test_volumes_uniform_at_seed(self, small_field):
+        assert len(small_field._volumes) == len(small_field._positions)
+        assert np.ptp(small_field._volumes) == 0.0
+        # Uniform seed volume equals domain volume / N
+        expected = (small_field.L * small_field.W * small_field.H) / len(small_field._positions)
+        assert abs(small_field._volumes[0] - expected) < 1e-9
+
+    def test_particle_volume_property_is_mean(self, small_field):
+        assert abs(small_field.particle_volume - small_field._volumes.mean()) < 1e-12
+
+    def test_uniform_volume_matches_scalar_weighting(self, small_field):
+        """With uniform volumes, induction == kernel(omega) * scalar volume."""
+        from quantum_hydraulics.core.vortex_field import (
+            _compute_velocity_induction_numpy,
+        )
+        v = small_field.compute_velocity_induction()
+        base = _compute_velocity_induction_numpy(
+            small_field._positions, small_field._vorticities, small_field._sigmas,
+        )
+        scalar = base * small_field._volumes[0]
+        assert np.max(np.abs(v - scalar)) < 1e-9
+
+    def test_volume_scales_source_strength_linearly(self, hydraulics):
+        """Doubling a source particle's volume doubles the velocity it induces."""
+        field = VortexParticleField(hydraulics, length=50, n_particles=2)
+        field._positions = np.array([[10.0, 15.0, 2.5], [12.0, 15.0, 2.5]])
+        field._vorticities = np.array([[0.0, 0.0, 1.0], [0.0, 0.0, 0.0]])
+        field._sigmas = np.array([0.5, 0.5])
+        field._volumes = np.array([1.0, 1.0])
+        v1 = field.compute_velocity_induction()[1].copy()  # velocity on particle 1
+
+        field._volumes = np.array([2.0, 1.0])  # double the source (particle 0)
+        v2 = field.compute_velocity_induction()[1].copy()
+
+        assert np.allclose(v2, 2.0 * v1, rtol=1e-9, atol=1e-12)
+
+    def test_shed_particles_get_volume(self, hydraulics):
+        """Pier-shed particles must keep _volumes in sync with the other arrays."""
+        field = VortexParticleField(hydraulics, length=50, n_particles=200)
+        # Simulate an append like pier shedding does
+        n0 = len(field._positions)
+        field._positions = np.vstack([field._positions, [[25.0, 15.0, 2.5]]])
+        field._vorticities = np.vstack([field._vorticities, [[0.0, 1.0, 0.0]]])
+        field._sigmas = np.concatenate([field._sigmas, [0.3]])
+        field._volumes = np.concatenate([field._volumes, [field._ref_volume]])
+        assert len(field._volumes) == len(field._positions) == n0 + 1
+        # Induction must not raise on the appended state
+        v = field.compute_velocity_induction()
+        assert v.shape == (n0 + 1, 3)

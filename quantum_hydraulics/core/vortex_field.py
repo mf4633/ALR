@@ -405,6 +405,8 @@ class VortexParticleField:
         self._vorticities: np.ndarray = np.zeros((0, 3), dtype=np.float64)
         self._sigmas: np.ndarray = np.zeros(0, dtype=np.float64)
         self._ages: np.ndarray = np.zeros(0, dtype=np.float64)
+        # Per-particle volume element (ft^3); strength_j = omega_j * Vol_j.
+        self._volumes: np.ndarray = np.zeros(0, dtype=np.float64)
 
         # Core size parameters
         self.base_sigma = self.H / 5.0
@@ -431,21 +433,40 @@ class VortexParticleField:
         # the vorticity integrated over a finite region: strength = omega * Vol
         # (units of circulation * length), which is the ``dV`` in the Biot-Savart
         # integral.  Without it the discretized sum carries the wrong units and
-        # its magnitude grows like sqrt(N) with particle count.  Use the mean
-        # domain volume per particle as the weight.
+        # its magnitude grows like sqrt(N) with particle count.
         #
-        # NOTE: this corrects the units/discretization, but it does NOT by itself
-        # make the induced field converge with N.  The seeded vorticity is a
-        # random-phase turbulence proxy, so the net induced velocity is a random
-        # walk that scales like 1/sqrt(N) once volume-weighted.  A discretization-
-        # independent field requires a coherent (resolved) vorticity distribution,
-        # not random seeds -- see LIMITATIONS.md.
-        self.particle_volume = self._reference_particle_volume()
+        # Volume is stored *per particle* so that refinement (splitting particles
+        # in observation zones) can subdivide a parent's volume among its
+        # children while conserving total strength.  At seeding the distribution
+        # is uniform, so every particle gets the mean domain volume per particle;
+        # this reproduces the earlier scalar-volume behaviour exactly (the kernel
+        # is linear in the source strength, so a uniform factor pulls out).
+        #
+        # NOTE: the volume weight corrects units/discretization but does NOT by
+        # itself make the induced field converge with N.  The seeded vorticity is
+        # a random-phase turbulence proxy, so the net induced velocity is a
+        # random walk (~1/sqrt(N) once volume-weighted).  A discretization-
+        # independent field also needs a coherent (resolved) vorticity
+        # distribution and true refinement -- see docs/ALR_REFINEMENT_DESIGN.md.
+        self._ref_volume = self._reference_particle_volume()
+        self._volumes = np.full(len(self._positions), self._ref_volume,
+                                dtype=np.float64)
 
     def _reference_particle_volume(self) -> float:
-        """Mean domain volume per particle (ft^3), used as the strength weight."""
+        """Mean domain volume per particle (ft^3); the seed-time volume weight."""
         n = max(len(self._positions), 1)
         return (self.L * self.W * self.H) / n
+
+    @property
+    def particle_volume(self) -> float:
+        """Mean per-particle volume (ft^3).
+
+        Backwards-compatible scalar view of ``_volumes``; equals the uniform
+        seed volume until refinement makes volumes non-uniform.
+        """
+        if len(self._volumes) == 0:
+            return self._reference_particle_volume()
+        return float(self._volumes.mean())
 
     def _build_velocity_lut(self, n_points: int = 200):
         """Pre-compute velocity profile lookup table for fast interpolation."""
@@ -599,8 +620,10 @@ class VortexParticleField:
         v = (1/4pi) * integral( (omega x r) / |r|^3 dV )
 
         The integral is discretized as a sum over particles, each contributing
-        its strength omega_j * Vol_j (see ``particle_volume``); the volume weight
-        makes the result independent of the number of particles used.
+        its strength omega_j * Vol_j.  The volume weight is folded into the source
+        strength per particle, so non-uniform volumes (from refinement) are
+        handled directly and, for uniform volumes, the result is identical to
+        scaling by a single scalar.
 
         OPTIMIZED: Uses Numba JIT compilation when available.
 
@@ -618,18 +641,27 @@ class VortexParticleField:
             self._spatial_tree = cKDTree(self._positions)
         self._tree_build_counter += 1
 
+        # Source strength = vorticity * per-particle volume element.  The kernel
+        # is linear in the source term, so weighting here applies Vol_j to each
+        # source particle j (the target's own volume does not affect its induced
+        # velocity).  Guard against hand-built state whose _volumes was not kept
+        # in sync with the particle arrays by falling back to a uniform volume.
+        vols = self._volumes
+        if len(vols) != n:
+            vols = np.full(n, self._ref_volume, dtype=np.float64)
+        strengths = self._vorticities * vols[:, np.newaxis]
+
         # Use Numba-accelerated version if available
         if HAS_NUMBA and n > 100:
             velocities = _compute_velocity_induction_numba(
-                self._positions, self._vorticities, self._sigmas
+                self._positions, strengths, self._sigmas
             )
         else:
             velocities = _compute_velocity_induction_numpy(
-                self._positions, self._vorticities, self._sigmas, self._spatial_tree
+                self._positions, strengths, self._sigmas, self._spatial_tree
             )
 
-        # Weight by the per-particle volume element (strength = omega * Vol)
-        return velocities * self.particle_volume
+        return velocities
 
     def apply_diffusion(self, dt: float = 0.05):
         """
@@ -717,6 +749,11 @@ class VortexParticleField:
                     self._sigmas = np.concatenate([self._sigmas, new_sig])
                     self._ages = np.concatenate([
                         self._ages, np.zeros(len(new_pos))
+                    ])
+                    # Shed particles carry the reference (seed-time) volume.
+                    self._volumes = np.concatenate([
+                        self._volumes,
+                        np.full(len(new_pos), self._ref_volume),
                     ])
 
         # Store trail for visualization
@@ -928,7 +965,9 @@ class VortexParticleField:
         self.min_sigma = hydraulics.eta_kolmogorov * 3
         self._build_velocity_lut()
         self._seed_particles()
-        self.particle_volume = self._reference_particle_volume()
+        self._ref_volume = self._reference_particle_volume()
+        self._volumes = np.full(len(self._positions), self._ref_volume,
+                                dtype=np.float64)
 
     def __repr__(self) -> str:
         return (
