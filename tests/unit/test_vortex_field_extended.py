@@ -532,3 +532,29 @@ class TestCoherentSeeding:
         assert abs(coh.mean()) > 0.2            # real signal
         assert 0.2 <= np.mean(ran < 0) <= 0.8   # random: mixed sign (noise)
         assert abs(ran.mean()) < abs(coh.mean())
+
+
+# =============================================================================
+# TestPierShedCap (bounded shed-particle accumulation)
+# =============================================================================
+
+class TestPierShedCap:
+    """Pier shedding must not grow the particle array without bound."""
+
+    def test_shed_particles_bounded(self, hydraulics):
+        from quantum_hydraulics.core.pier_shedding import PierBody
+        field = VortexParticleField(hydraulics, length=100, n_particles=500)
+        field.pier_bodies = [PierBody(x=50, y=15, diameter=3.0)]
+        field.max_shed_particles = 60  # small cap to exercise culling
+        for _ in range(300):
+            field.step(dt=0.05)
+        # never exceeds base + cap; ambient base is preserved
+        assert len(field._positions) <= field._n_base + field.max_shed_particles
+        assert field._n_base == 500
+        # arrays stay consistent
+        n = len(field._positions)
+        assert len(field._vorticities) == n == len(field._sigmas) == len(field._volumes) == len(field._ages)
+
+    def test_default_cap_is_generous(self, hydraulics):
+        field = VortexParticleField(hydraulics, n_particles=200)
+        assert field.max_shed_particles == 4 * 200
