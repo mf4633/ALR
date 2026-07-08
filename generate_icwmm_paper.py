@@ -289,7 +289,7 @@ body(
     "that enables physics-based turbulence simulation at engineering-relevant locations "
     "without the prohibitive cost of uniform high-resolution computation. ALR employs "
     "observation-dependent resolution within a vortex particle framework using a "
-    "symmetrized Biot-Savart kernel (Barba & Rossi 2010) that preserves circulation. "
+    "symmetrized variable-core Biot-Savart kernel (Barba et al. 2005) that conserves total vortex strength. "
     "The underlying hydraulics use Colebrook-White friction rather than Manning\u2019s equation, "
     "with sediment-dependent scour severity index parameters (sand: k=3.0, m=0.8; gravel: k=2.0, "
     "m=1.2; clay: k=1.5, m=1.5). "
@@ -297,7 +297,7 @@ body(
     f"(r = 0.605), Laursen live-bed contraction scour (r = 0.998), Melville (1997) "
     f"dimensionless design curve, Manning\u2019s equation, Shields criterion, and Neill "
     f"critical velocity\u2014and reduces a 6,000-particle simulation to 500 particles "
-    f"({cost.errors_vorticity[1]:.2%} vorticity error) with circulation conserved to 0.03%."
+    f"({cost.errors_vorticity[1]:.2%} vorticity error) with total vortex strength conserved to within 0.1%."
 )
 body(
     "The method is validated through five controlled ALR experiments plus cross-checks "
@@ -376,14 +376,15 @@ doc.add_heading("2.2 Symmetrized Vortex Particle Method", level=2)
 body(
     "Particles carry 3D vorticity vectors in a Structure-of-Arrays layout. The velocity "
     "field is computed via the Biot-Savart integral using a symmetrized regularized "
-    "kernel (Barba & Rossi 2010):",
+    "kernel (Barba et al. 2005):",
     indent=True,
 )
 display_eq(r"\sigma_{ij}^2 = \sigma_i^2 + \sigma_j^2")
 body(
-    "ensuring momentum conservation when core sizes vary. Viscous diffusion uses "
-    "symmetrized Particle Strength Exchange (PSE). Circulation conservation was verified "
-    "at 0.03% drift over 30-step simulations.",
+    "ensuring momentum conservation when core sizes vary. Viscous diffusion uses a "
+    "relaxation-based (symmetrized) approximation, not strict Particle Strength "
+    "Exchange. Total vortex strength was conserved to within 0.1% over 30-step "
+    "simulations.",
 )
 
 doc.add_heading("2.3 Observation-Dependent Resolution", level=2)
@@ -587,7 +588,7 @@ doc.add_heading("4.1 Convergence", level=2)
 body(
     f"Table 4 shows ALR metrics converging as observation radius increases from 5 to "
     f"100 ft. Vorticity converges to within 0.4% between the last two radii. "
-    f"Circulation is conserved to 0.03% over the full simulation.",
+    f"Total vortex strength is conserved to within 0.1% over the full simulation.",
 )
 
 table(
@@ -704,7 +705,7 @@ body_math(
 )
 body_math(
     ["2. Kernel mathematics: symmetrized ", Math(r"\sigma_{ij}^2 = \sigma_i^2 + \sigma_j^2"),
-     " (Barba & Rossi 2010). Circulation conservation verified at 0.03% drift."],
+     " (Barba et al. 2005). Total vortex strength conservation verified to within 0.1% drift."],
 )
 body_math(
     ["3. Energy metric: replaced with sigma-independent enstrophy (",
@@ -750,8 +751,8 @@ conclusions = [
     f"r = 0.605). QH provides a complementary turbulence amplification factor that "
     f"augments\u2014rather than replaces\u2014established empirical methods.",
     f"ALR reduces a 6,000-particle uniform simulation to 500 particles with "
-    f"{cost.errors_vorticity[1]:.2%} vorticity error and circulation conserved to 0.03% "
-    f"via the symmetrized Biot-Savart kernel, achieving a {speedup:.0f}\u00d7 "
+    f"{cost.errors_vorticity[1]:.2%} vorticity error and total vortex strength conserved "
+    f"to within 0.1% via the symmetrized Biot-Savart kernel, achieving a {speedup:.0f}\u00d7 "
     f"wall-time reduction.",
     f"Quasi-unsteady sediment transport with Hirano armoring produces 10.6 ft of "
     f"clear-water scour with 9\u00d7 surface coarsening\u2014physically consistent behavior "

@@ -378,7 +378,7 @@ body(
 )
 display_eq(r"\sigma_{ij}^2 = \sigma_i^2 + \sigma_j^2")
 body(
-    "Circulation conservation was verified at 0.03% drift over 30-step simulations. "
+    "Total vortex strength was conserved to within 0.1% over 30-step simulations. "
     "The underlying hydraulics use the Colebrook-White equation rather than Manning\u2019s, "
     "providing friction velocity and bed shear stress directly from the friction factor:",
 )

@@ -251,7 +251,7 @@ body(
     "and published HEC-RAS tutorial results. "
     "The method uses Colebrook-White friction, vortex particle turbulence simulation, "
     "and observation-dependent adaptive resolution to compute bed shear stress from "
-    "first principles, rather than relying on empirical correction factors. "
+    "mechanistic closures, rather than relying on lumped empirical correction factors. "
     "Six HEC-18 equations were implemented exactly (CSU pier scour with K1\u2013K4 "
     "correction factors, Froehlich pier scour, Laursen live-bed and clear-water "
     "contraction scour, HIRE and Froehlich abutment scour) and verified against "
@@ -302,8 +302,8 @@ body(
 )
 body(
     "Physics-based computational methods offer an alternative: computing bed shear stress "
-    "from first principles (Navier-Stokes equations, turbulence theory, boundary layer "
-    "physics) rather than from empirical curve fits. However, full CFD simulation remains "
+    "from mechanistic closures (turbulence and boundary-layer theory) rather than from "
+    "lumped empirical curve fits. However, full CFD simulation remains "
     "prohibitively expensive for routine bridge scour evaluation. This paper presents a "
     "middle path: a vortex particle method with adaptive resolution that computes "
     "physics-based shear amplification at bridge piers while remaining fast enough for "
@@ -393,11 +393,11 @@ body(
     "horseshoe vortex formation and von K\u00e1rm\u00e1n vortex street dynamics. Each "
     "particle carries a 3D vorticity vector in a Structure-of-Arrays layout. The "
     "velocity field is computed via the Biot-Savart integral using a symmetrized "
-    "regularized kernel (Barba & Rossi 2010): \u03c3_ij\u00b2 = \u03c3_i\u00b2 + \u03c3_j\u00b2, "
-    "ensuring momentum conservation when core sizes vary. Viscous diffusion uses "
-    "symmetrized Particle Strength Exchange (PSE): d\u03c9_i/dt = "
-    "\u03bd \u03a3_j (\u03c9_j - \u03c9_i) \u03b7_\u03b5(x_i - x_j) V_j, where "
-    "\u03b7_\u03b5 is a smoothing kernel normalized to reproduce the Laplacian.",
+    "regularized kernel (Barba et al. 2005): \u03c3_ij\u00b2 = \u03c3_i\u00b2 + \u03c3_j\u00b2, "
+    "ensuring momentum conservation when core sizes vary. Viscous diffusion uses a "
+    "relaxation-based approximation that relaxes each particle's vorticity toward the "
+    "local Gaussian-weighted mean \u2014 a smoothing approximation, not the strictly "
+    "conservative Particle Strength Exchange scheme.",
     indent=True,
 )
 body(
@@ -795,7 +795,7 @@ conclusions = [
 
     f"Physics-based bed shear (Colebrook-White) correlates strongly with HEC-18 CSU "
     f"scour depth across parametric variations in velocity (r = {v_corr:.2f}) and "
-    f"pier width (r = {p_corr:.2f}), confirming that the first-principles approach "
+    f"pier width (r = {p_corr:.2f}), confirming that the mechanistic approach "
     f"captures the same physical sensitivities as the empirical method.",
 
     f"The vortex particle method provides 1.44x turbulence amplification at pier "
