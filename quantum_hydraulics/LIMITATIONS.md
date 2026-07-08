@@ -58,23 +58,28 @@ It does **not** include:
 
 ### Induced-Velocity Field Is Not Discretization-Independent
 
-By default the vorticity field is seeded as a **random-phase turbulence proxy**
-(`seeding="random"`; random orientations per particle), not a coherent resolved
-vorticity distribution. The Biot-Savart induction correctly weights each
-particle by its volume element (strength = omega * Vol), which fixes the units
-and the previous sqrt(N) growth of the induced velocity with particle count.
-However, because the *random-phase* seeds average to zero, the net induced
-velocity is a random walk whose magnitude scales like 1/sqrt(N); with this seed
-the field does **not** converge to a fixed value as particles are added.
+The field is seeded by default with a **coherent mean-shear vorticity**
+(`seeding="coherent"`): `omega = du/dz`, a deterministic resolved field. The
+Biot-Savart induction weights each particle by its volume element
+(strength = omega * Vol), fixing the units and the previous sqrt(N) growth of the
+induced velocity. Because the coherent seed is a real (non-zero-mean) field, the
+ensemble-mean induced velocity converges to a stable non-zero limit as N grows,
+with signal-to-noise increasing ~sqrt(N) (demonstrated in
+`run_convergence_study.py`).
 
-A coherent seeding option (`seeding="coherent"`) addresses this: it seeds the
-mean-shear vorticity `omega = du/dz` (a deterministic, resolved field), for which
-the ensemble-mean induced velocity converges to a stable non-zero limit as N
-grows (demonstrated in `run_convergence_study.py`). Combined with conservative
-refinement (`enable_refinement=True`), this is the configuration in which the
-adaptive-Lagrangian-refinement claim holds. Both options are **off by default**
-pending recalibration of the empirical 2D scour model against the new field
-(see docs/ALR_REFINEMENT_DESIGN.md, Phase 5).
+The legacy **random-phase** seed (`seeding="random"`) is retained for
+reproducing earlier results, but it has no converged limit: the random
+orientations average to zero, so the net induced velocity is a 1/sqrt(N) random
+walk. Prefer the coherent seed for any quantitative use.
+
+**Refinement stays opt-in** (`enable_refinement=False`). Enabling it restores the
+overlap condition in observation zones (adds degrees of freedom conservatively),
+but it runs every step, grows the particle count, and measurably slows the
+simulation (~4x on the ALR study); enable it when high in-zone resolution is
+actually needed. This ALR machinery affects only `VortexParticleField` (the
+research/demonstration path); the engineering scour reports use a separate
+particle model and are unchanged. The empirical scour constants still await
+recalibration against reference data (docs/RECALIBRATION_SPEC.md).
 
 Consequences:
 - The adaptive-resolution ("ALR") behavior concentrates core size (sigma) near

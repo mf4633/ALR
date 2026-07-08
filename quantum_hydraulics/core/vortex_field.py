@@ -384,13 +384,16 @@ class VortexParticleField:
         hydraulics: HydraulicsEngine,
         length: float = 200.0,
         n_particles: int = 6000,
-        seeding: str = "random",
+        seeding: str = "coherent",
     ):
         self.hydraulics = hydraulics
-        # Vorticity seeding mode: "random" (isotropic turbulence proxy, the
-        # historical default) or "coherent" (deterministic mean-shear vorticity
-        # omega = du/dz, which has a converged limit -- see _seed_coherent and
-        # docs/ALR_REFINEMENT_DESIGN.md).
+        # Vorticity seeding mode. Default "coherent": deterministic mean-shear
+        # vorticity omega = du/dz, which gives the induced field a converged
+        # limit (see _seed_coherent and docs/ALR_REFINEMENT_DESIGN.md). Pass
+        # "random" for the legacy isotropic turbulence proxy (no converged limit;
+        # kept for reproducing earlier results). Note: refinement stays opt-in
+        # (enable_refinement=False) because it adds per-step cost and changes
+        # particle counts -- enable it when high in-zone resolution is needed.
         self.seeding = seeding
         self.L = length
         self.W = hydraulics.width

@@ -474,8 +474,14 @@ class TestRefinement:
 class TestCoherentSeeding:
     """Coherent mean-shear seeding and its convergence property."""
 
-    def test_default_is_random(self, hydraulics):
+    def test_default_is_coherent(self, hydraulics):
+        # Coherent mean-shear seeding is the default (it gives the field a
+        # converged limit); random-phase remains available opt-in.
         field = VortexParticleField(hydraulics, n_particles=100)
+        assert field.seeding == "coherent"
+
+    def test_random_seeding_still_available(self, hydraulics):
+        field = VortexParticleField(hydraulics, n_particles=100, seeding="random")
         assert field.seeding == "random"
 
     def test_coherent_vorticity_is_mean_shear(self, hydraulics):

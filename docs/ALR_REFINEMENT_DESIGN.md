@@ -149,9 +149,29 @@ refinement can converge to.
    vorticity proxy) and the reference data each needs are catalogued in
    `docs/RECALIBRATION_SPEC.md`. Fitting them requires scour reference/flume data
    and is intentionally left to a data-in-hand calibration pass.
-6. Flip refinement + coherent seeding on by default only after 5's recalibration
-   is fitted and validated; update the paper's claims to match the measured
-   convergence.
+6. **Defaults (done, partial).** Measured the effect of flipping the defaults:
+   - **Coherent seeding is now the default** (`seeding="coherent"`). It gives the
+     field a converged limit, has no per-step cost, and all 24 ALR checks pass;
+     only a default-asserting test needed updating. `seeding="random"` remains
+     available for reproducing earlier results.
+   - **Refinement stays opt-in** (`enable_refinement=False`) on purpose. Turning
+     it on by default made the ALR study ~4x slower (refinement runs every step
+     and grows the particle count) and regressed the vorticity-convergence check
+     (`relative_diff` 0.0 -> 0.37). It is a tool to invoke when high in-zone
+     resolution is needed, not an always-on cost.
+   - Note: this only affects the research/ALR path -- `VortexParticleField` is
+     not used by the engineering scour reports (`swmm_node`/`swmm_2d` build their
+     own particle clouds), so no scour deliverable changes.
+
+### Not done: fitting the engineering scour constants (Phase 5 refit)
+
+Attempted and found not well-posed with the current outputs: the design curves
+predict *equilibrium local pier-scour depth* (CSU/Froehlich, ft), but the tool
+outputs a 0-1 shear-based risk index and a transport-based *general* degradation
+rate (ft/yr) -- different physical quantities. Calibrating the constants to
+"reproduce CSU" would require first adding a local-pier-scour depth model to the
+tool, then real flume data to validate. Documented in RECALIBRATION_SPEC.md;
+left for a data-in-hand calibration pass rather than fabricated.
 
 ### Status note (Phases 3-4)
 
