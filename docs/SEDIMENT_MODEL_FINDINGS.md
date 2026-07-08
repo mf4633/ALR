@@ -1,5 +1,17 @@
 # Sediment / Morphodynamics Model — Findings
 
+> **RESOLVED (implemented).** The coordinated fix described below has been
+> implemented and verified: `ActiveLayerModel` was rewritten to track absolute
+> per-fraction solids volumes (mass-conserving Hirano), Exner is length-based,
+> and the fractional MPM uses the per-fraction table critical shear with an
+> Egiazaroff exposure easing applied to coarse grains only (`min(ξ²,1)`). The
+> corrected model armors in the clear-water regime (d50 0.8→5.0 mm, fines
+> depleted, transport self-limits), erodes through at high shear (negative
+> control), and conserves sediment mass to ~1e-15. `run_sediment_transport.py`
+> now asserts mass conservation, coarse-lag formation, and the erode-through
+> control (10/10 checks). Design + measured proof: `docs/DESIGN_sediment_fix.md`.
+> The historical analysis below is retained for context.
+
 Status: **findings only — not yet fixed in code.** A review of the quasi-unsteady
 sediment engine (`integration/sediment_transport.py`) surfaced several real
 correctness defects. Two are individually clear and correct to fix, but fixing

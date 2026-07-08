@@ -23,6 +23,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from quantum_hydraulics.integration.sediment_transport import (
     QuasiUnsteadyEngine,
+    ChannelReach,
+    GrainSizeDistribution,
 )
 from quantum_hydraulics.research.sediment_scenarios import (
     generate_clearwater_scour_scenario,
@@ -79,11 +81,12 @@ def checks_quasi_unsteady(verbose=False):
         f"initial_d50={sim.initial_gradation.d50_mm:.3f}, final_d50={sim.final_d50_mm:.3f} mm",
     ))
 
-    # 4. Total scour reasonable (clear-water below dam can be significant)
+    # 4. Total scour physically bounded (length-based Exner; the old width-based
+    #    bug over-predicted by ~L/W = 12.5x and would fail this tightened bound).
     scour = abs(sim.max_scour_ft)
     results.append(CheckResult(
-        "Scour depth reasonable (< 20 ft for clear-water)",
-        scour < 20.0,
+        "Scour depth physically bounded (< 3 ft for clear-water)",
+        scour < 3.0,
         f"max_scour={scour:.3f} ft",
     ))
 
@@ -119,6 +122,44 @@ def checks_quasi_unsteady(verbose=False):
         "Bed monotonically degrading (clear-water)",
         mono,
         f"bed_range=[{bed.min():.4f}, {bed.max():.4f}]",
+    ))
+
+    # 8. Sediment mass conservation (would have caught the non-conserving
+    #    active-layer bug). The corrected absolute-volume Hirano layer conserves
+    #    total sediment volume to machine precision.
+    resid = abs(engine.mass_residual)
+    total0 = engine.active_layer._total0
+    rel = resid / max(total0, 1e-30)
+    results.append(CheckResult(
+        "Sediment mass conserved (relative residual < 1e-10)",
+        rel < 1e-10,
+        f"|residual|={resid:.2e} ft, relative={rel:.2e}",
+    ))
+
+    # 9. Coarse armor lag: fines depleted, strong coarsening
+    F = sim.final_gradation.percentages
+    d_mm = np.array([f.d_mm for f in sim.final_gradation.fractions])
+    fine_final = float(F[d_mm < 0.8].sum())
+    ratio = sim.final_d50_mm / sim.initial_gradation.d50_mm
+    results.append(CheckResult(
+        "Coarse armor lag forms (fines < 2%, d50 > 3x)",
+        fine_final < 0.02 and ratio > 3.0,
+        f"fine_surface={fine_final:.3f}, d50_ratio={ratio:.2f}x",
+    ))
+
+    # 10. NEGATIVE CONTROL: shear above ALL fractions' critical must NOT armor
+    #     (erode-through) -- proves the model is not hard-wired to always armor.
+    ch2 = ChannelReach(length_ft=500, width_ft=40, slope=0.02,
+                       roughness_ks=0.1, side_slope=0.0)
+    eng2 = QuasiUnsteadyEngine(ch2, GrainSizeDistribution.default_sand_gravel(),
+                               upstream_feed_fraction=0.0, substrate_depth_ft=40.0)
+    eng2.set_hydrograph_durations([(2000.0, 500.0)])
+    sim2 = eng2.run()
+    ratio2 = sim2.final_d50_mm / sim2.initial_gradation.d50_mm
+    results.append(CheckResult(
+        "Erode-through at high shear (no false armor)",
+        (not sim2.armored) and ratio2 < 2.0,
+        f"tau={sim2.steps[0].bed_shear_psf:.2f}psf, armored={sim2.armored}, d50_ratio={ratio2:.2f}x",
     ))
 
     if verbose:

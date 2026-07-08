@@ -96,82 +96,140 @@ class GrainSizeDistribution:
 
 class ActiveLayerModel:
     """
-    Tracks surface gradation evolution with substrate exchange.
+    Mass-conserving Hirano (1971) active-layer model.
 
-    On scour: fines removed, substrate mixed into surface.
-    On deposition: deposited material (proportional to fractional transport)
-    added to surface.
+    State is tracked as ABSOLUTE solids volume per unit bed area, per fraction:
+    ``s`` (active layer) and ``b`` (substrate reservoir), plus cumulative
+    ``exported``/``imported`` so total sediment mass is conserved to machine
+    precision (invariant sum(s + b + exported - imported) = const).
+
+    Armoring is EMERGENT, not hard-coded: transport removes fractions
+    size-selectively (supply-limited), the substrate resupplies parent
+    composition to maintain active-layer thickness, and fractions below their
+    critical shear accumulate as a coarse lag that throttles transport.
+
+    (The previous version tracked only renormalized percentages -- no absolute
+    mass existed to conserve -- and re-injected fine-rich substrate every scour
+    step, which is why it could not correctly armor.)
     """
 
-    def __init__(self, initial_gradation: GrainSizeDistribution):
-        self.surface = initial_gradation.copy()
-        self.substrate = initial_gradation.copy()
-        self.thickness_ft = max(2.0 * self.surface.d90_mm / 304.8, 0.02)
+    def __init__(self, initial_gradation: GrainSizeDistribution,
+                 porosity: float = 0.40, substrate_depth_ft: float = 8.0):
+        self.surface = initial_gradation.copy()      # view; .percentages = F_i
+        self.porosity = porosity
+        self.n = initial_gradation.n_fractions
+        self._d_mm = np.array([f.d_mm for f in initial_gradation.fractions])
+        self._d_median = initial_gradation.d50_mm    # fines = d < initial d50
+
+        f0 = np.asarray(initial_gradation.percentages, dtype=np.float64)
+        f0 = f0 / max(f0.sum(), 1e-30)
+        self._f0 = f0.copy()
+
+        d90_0 = self._d_pct(f0, 0.90)
+        self.thickness_ft = max(2.0 * d90_0 / 304.8, 0.05)
+        self.s = f0 * (1.0 - porosity) * self.thickness_ft   # active solids/area
+        self.b = f0 * (1.0 - porosity) * substrate_depth_ft  # substrate reservoir
+        self.exported = np.zeros(self.n)
+        self.imported = np.zeros(self.n)
+        self._total0 = self._total()
+        self._sync_surface()
+
+    def _total(self) -> float:
+        return float(np.sum(self.s + self.b + self.exported - self.imported))
+
+    @property
+    def mass_residual(self) -> float:
+        """Sediment mass balance residual (ft); should stay ~0."""
+        return self._total() - self._total0
+
+    def _F(self) -> np.ndarray:
+        """Surface volume fractions from absolute active-layer volumes."""
+        T = self.s.sum()
+        return self.s / T if T > 0 else self._f0.copy()
+
+    def _d_pct(self, F: np.ndarray, p: float) -> float:
+        order = np.argsort(self._d_mm)
+        cum = np.cumsum(np.asarray(F)[order])
+        cum = cum / max(cum[-1], 1e-30)
+        return float(np.interp(p, cum, self._d_mm[order]))
+
+    def _sync_surface(self):
+        self.surface.percentages = self._F()
 
     @property
     def is_armored(self) -> bool:
-        """True if fine fractions (< d50_initial) are mostly depleted."""
-        # Fractions with d < median of the full distribution
-        d_median = self.substrate.d50_mm
-        fine_pct = sum(
-            self.surface.percentages[i]
-            for i, f in enumerate(self.surface.fractions)
-            if f.d_mm < d_median
-        )
+        """True if fine fractions (< initial d50) are mostly depleted."""
+        F = self._F()
+        fine_pct = float(np.sum(F[self._d_mm < self._d_median]))
         return fine_pct < 0.05
 
-    def update(self, delta_z: float, fractional_transport: np.ndarray):
+    def update(self, qs_out: np.ndarray, qs_in: np.ndarray,
+               dt: float, length: float, depth: float) -> float:
         """
-        Update active layer after a transport step (Hirano 1971).
-
-        On scour: transported material is removed from the surface
-        proportional to each fraction's transport rate.  This naturally
-        leaves the coarse, untransported material behind — armoring.
+        Advance the active layer one sub-step and return the bed change dz (ft).
 
         Parameters
         ----------
-        delta_z : float
-            Bed change (ft, negative = scour)
-        fractional_transport : np.ndarray
-            Volumetric transport per fraction (ft3/ft/s), shape (n,)
+        qs_out, qs_in : np.ndarray
+            Per-fraction volumetric transport out of / into the reach
+            (ft^3/ft/s), shape (n,).
+        dt : float
+            Sub-step duration (s).
+        length : float
+            Reach length (ft) -- the Exner divisor (NOT the width).
+        depth : float
+            Flow depth (ft), for the stability limiter.
         """
-        total_q = fractional_transport.sum()
-        if abs(delta_z) < 1e-10:
-            return
+        # Length-based Exner, per fraction: solids/area eroded (>0 = scour)
+        erod = (qs_out - qs_in) * dt / max(length, 1e-6)
 
-        if delta_z < 0 and total_q > 1e-15:
-            # Scour: remove each fraction proportional to its transport rate
-            # This is the key armoring mechanism: fines transport more,
-            # so they are preferentially removed, coarsening the surface.
-            eroded_volume = abs(delta_z)  # ft of bed per unit area
-            removal_fracs = fractional_transport / total_q
+        # Stability limiter (Courant on bulk bed change)
+        dz = -erod.sum() / (1.0 - self.porosity)
+        max_dz = 0.02 * max(depth, 0.1)
+        if abs(dz) > max_dz > 0:
+            scale = max_dz / abs(dz)
+            erod = erod * scale
+            qs_out = qs_out * scale
+            qs_in = qs_in * scale
 
-            # Fraction of active layer removed
-            removal_ratio = min(eroded_volume / max(self.thickness_ft, 0.001), 0.8)
+        # Supply limit: cannot erode more of fraction i than exists (active+sub)
+        avail = self.s + self.b
+        over = erod > avail
+        if np.any(over):
+            erod = np.where(over, avail, erod)
+            qs_out = np.where(over, qs_in + erod * length / max(dt, 1e-30), qs_out)
 
-            # Remove transported material, keep untransported material
-            self.surface.percentages -= removal_fracs * removal_ratio
+        self.s = self.s - erod
+        self.exported = self.exported + qs_out * dt / max(length, 1e-6)
+        self.imported = self.imported + qs_in * dt / max(length, 1e-6)
+        dz = -erod.sum() / (1.0 - self.porosity)
 
-            # Refill from substrate (the bed material below the active layer)
-            self.surface.percentages += self.substrate.percentages * removal_ratio * 0.5
+        # Any tiny residual negative from float error: borrow from same-fraction
+        # substrate (mass-conserving, NOT a clamp-to-zero which would create mass)
+        neg = self.s < 0
+        if np.any(neg):
+            fix = -self.s[neg]
+            self.s[neg] = self.s[neg] + fix
+            self.b[neg] = self.b[neg] - fix
 
-        elif delta_z > 0 and total_q > 1e-15:
-            # Deposition: deposited material composition = transport composition
-            dep_fracs = fractional_transport / total_q
-            dep_ratio = min(delta_z / max(self.thickness_ft, 0.001), 0.5)
-            self.surface.percentages = (
-                self.surface.percentages * (1.0 - dep_ratio)
-                + dep_fracs * dep_ratio
-            )
+        # Active-layer thickness maintenance via substrate exchange
+        self.thickness_ft = max(2.0 * self._d_pct(self._F(), 0.90) / 304.8, 0.05)
+        deficit = (1.0 - self.porosity) * self.thickness_ft - self.s.sum()
+        if deficit > 0:                      # scour: pull parent material up
+            Tb = self.b.sum()
+            if Tb > 1e-15:
+                take = min(deficit, Tb) * (self.b / Tb)
+                self.s = self.s + take
+                self.b = self.b - take
+        elif deficit < 0:                    # aggradation: bury surface material
+            Ts = self.s.sum()
+            if Ts > 1e-15:
+                give = (-deficit) * (self.s / Ts)
+                self.s = self.s - give
+                self.b = self.b + give
 
-        # Clamp and re-normalize
-        self.surface.percentages = np.maximum(self.surface.percentages, 0.0)
-        total = self.surface.percentages.sum()
-        if total > 0:
-            self.surface.percentages /= total
-
-        # Update thickness from current d90
-        self.thickness_ft = max(2.0 * self.surface.d90_mm / 304.8, 0.02)
+        self._sync_surface()
+        return dz
 
 
 # ── Channel reach ─────────────────────────────────────────────────────────
@@ -328,10 +386,13 @@ class QuasiUnsteadyEngine:
         upstream_feed_fraction: float = 0.0,
         computational_increment_hours: float = 1.0,
         bed_mixing_steps: int = 3,
+        substrate_depth_ft: float = 8.0,
     ):
         self.channel = channel
         self.initial_gradation = sediment_mix.copy()
-        self.active_layer = ActiveLayerModel(sediment_mix)
+        self.active_layer = ActiveLayerModel(
+            sediment_mix, porosity=porosity, substrate_depth_ft=substrate_depth_ft
+        )
         self.porosity = porosity
         self.feed_fraction = upstream_feed_fraction
         self.increment_hours = computational_increment_hours
@@ -379,16 +440,20 @@ class QuasiUnsteadyEngine:
             rho_s = frac.rho_s
             s = rho_s / RHO
 
-            # Egiazaroff hiding/exposure exponent
+            # Critical shear for this fraction: the calibrated per-fraction table
+            # value, with an Egiazaroff exposure easing applied ONLY to coarse
+            # grains (xi^2 < 1).  Fines keep their (larger) table threshold, which
+            # preserves the threshold spread that drives selective transport and
+            # static armoring.  NOTE: the full Egiazaroff hiding form
+            # (tau_c ~ xi^2) implements the equal-mobility hypothesis, which
+            # collapses the per-fraction thresholds and eliminates clear-water
+            # armoring entirely -- so it is deliberately not used here (verified).
             ratio = d_i / d_m
             if ratio > 0.01:
                 xi = np.log(19.0) / np.log(max(19.0 * ratio, 1.01))
             else:
                 xi = 1.0
-
-            # Corrected critical shear
-            tau_c_ref = 0.047 * (rho_s - RHO) * G * d_i  # Shields for this size
-            tau_c_corrected = tau_c_ref * ratio ** (xi - 1.0)
+            tau_c_corrected = frac.tau_c_psf * min(xi * xi, 1.0)
 
             # Shields parameter
             denom = (rho_s - RHO) * G * d_i
@@ -408,13 +473,10 @@ class QuasiUnsteadyEngine:
 
         return q_frac
 
-    def _apply_exner(self, qs_in, qs_out, dt_seconds, current_depth):
-        """Exner equation: dz = (qs_in - qs_out) * dt / ((1-p) * W)."""
-        width = self.channel.width_ft
-        dz = (qs_in - qs_out) * dt_seconds / ((1.0 - self.porosity) * width)
-        # Stability limiter: cap to 1% of current depth per sub-step
-        max_dz = 0.01 * max(current_depth, 0.1)
-        return np.clip(dz, -max_dz, max_dz)
+    @property
+    def mass_residual(self) -> float:
+        """Sediment mass-balance residual (ft); should stay ~0."""
+        return self.active_layer.mass_residual
 
     def run(self) -> SedimentTransportResults:
         """Execute the quasi-unsteady simulation."""
@@ -435,20 +497,21 @@ class QuasiUnsteadyEngine:
                     hyd = self.channel.compute_hydraulics(Q, depth)
                     tau = hyd["bed_shear"]
 
-                    # 2. Fractional transport
+                    # 2. Fractional transport (per fraction, ft^3/ft/s)
                     q_frac = self._compute_fractional_transport(
                         tau, self.active_layer.surface
                     )
                     total_qs_out = q_frac.sum()
+                    qs_in = q_frac * self.feed_fraction
                     total_qs_in = total_qs_out * self.feed_fraction
 
-                    # 3. Exner bed change
-                    delta_z = self._apply_exner(total_qs_in, total_qs_out, dt_sub, depth)
+                    # 3. Mass-conserving active-layer + length-based Exner update;
+                    #    returns the realized bed change (supply-limited).
+                    delta_z = self.active_layer.update(
+                        q_frac, qs_in, dt_sub, self.channel.length_ft, depth
+                    )
                     cumulative_z += delta_z
                     self.channel.bed_elevation += delta_z
-
-                    # 4. Update active layer
-                    self.active_layer.update(delta_z, q_frac)
 
                 elapsed_hours += inc_hours
 
