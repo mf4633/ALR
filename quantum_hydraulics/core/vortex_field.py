@@ -1,8 +1,8 @@
 """
 VortexParticleField - 3D vortex particle system with adaptive resolution.
 
-Implements Biot-Savart law for velocity induction and
-Particle Strength Exchange (PSE) for viscous diffusion.
+Implements the regularized Biot-Savart law for velocity induction and a
+relaxation-based approximation of viscous diffusion (see apply_diffusion).
 
 OPTIMIZED VERSION: Uses Structure-of-Arrays for 5-10x speedup.
 """
@@ -107,22 +107,24 @@ if HAS_NUMBA:
                 sigma_j_sq = sigmas[j] ** 2
 
                 # Symmetrized core size: sigma_ij^2 = sigma_i^2 + sigma_j^2
-                # (Barba & Rossi 2005, variable-blob Biot-Savart)
+                # (Barba et al. 2005, variable-blob Biot-Savart)
                 sigma_ij_sq = sigma_i_sq + sigma_j_sq
 
-                # Cutoff at max(sigma_i, sigma_j) * multiplier
-                cutoff_sq = cutoff_multiplier ** 2 * max(sigma_i_sq, sigma_j_sq)
+                # Cutoff at cutoff_multiplier * symmetrized core (consistent with
+                # the kernel width used below)
+                cutoff_sq = cutoff_multiplier ** 2 * sigma_ij_sq
                 if r_sq > cutoff_sq:
                     continue
 
-                # Regularized kernel with symmetrized sigma
+                # Low-order algebraic regularized Biot-Savart kernel:
+                #   K = 1 / (4 pi (r^2 + sigma_ij^2)^{3/2})
+                # This is the standard second-order algebraic (Rosenhead-Moore)
+                # smoothing; it is finite at r -> 0 and needs no extra cutoff
+                # function.  (The previous code multiplied this by a Gaussian
+                # 1 - exp(-r^2/sigma^2) factor, which does not correspond to any
+                # published blob and double-regularized the kernel.)
                 denom = (r_sq + sigma_ij_sq) ** 1.5 + 1e-12
-
-                # Viscous cutoff function (symmetric)
-                cutoff_func = 1.0 - np.exp(-r_sq / sigma_ij_sq)
-
-                # Biot-Savart kernel
-                K = cutoff_func / (4.0 * np.pi * denom)
+                K = 1.0 / (4.0 * np.pi * denom)
 
                 # Cross product: omega x r
                 ox, oy, oz = vorticities[j, 0], vorticities[j, 1], vorticities[j, 2]
@@ -142,10 +144,17 @@ if HAS_NUMBA:
         vorticities: np.ndarray,
         sigmas: np.ndarray,
         nu: float,
+        dt: float,
         search_multiplier: float = 4.0
     ) -> np.ndarray:
         """
-        Vectorized PSE diffusion with Numba acceleration.
+        Relaxation-based viscous diffusion with Numba acceleration.
+
+        Approximates d(omega)/dt = nu * laplacian(omega) by relaxing each
+        particle's vorticity toward the Gaussian-weighted local mean over a
+        timestep dt.  This is a smoothing approximation (it is not the strictly
+        conservative Particle Strength Exchange scheme); with molecular nu the
+        per-step change is negligible, as intended for the resolved scales here.
 
         Parameters
         ----------
@@ -157,6 +166,8 @@ if HAS_NUMBA:
             Particle core sizes, shape (N,)
         nu : float
             Kinematic viscosity
+        dt : float
+            Timestep in seconds
         search_multiplier : float
             Search radius as multiple of sigma
 
@@ -198,7 +209,11 @@ if HAS_NUMBA:
                 omega_avg[1] /= weight_sum
                 omega_avg[2] /= weight_sum
 
-                diffusion_rate = 2.0 * nu / (sigma_i_sq + 1e-12)
+                # Time-consistent relaxation fraction (dimensionless), clamped
+                # to <= 1 for stability.  Units: (1/s) * s = dimensionless.
+                diffusion_rate = 2.0 * nu * dt / (sigma_i_sq + 1e-12)
+                if diffusion_rate > 1.0:
+                    diffusion_rate = 1.0
 
                 new_vorticities[i, 0] = vorticities[i, 0] + diffusion_rate * (omega_avg[0] - vorticities[i, 0])
                 new_vorticities[i, 1] = vorticities[i, 1] + diffusion_rate * (omega_avg[1] - vorticities[i, 1])
@@ -257,14 +272,10 @@ def _compute_velocity_induction_numpy(
         # Symmetrized sigma: sigma_ij^2 = sigma_i^2 + sigma_j^2
         sigma_ij_sq = sigmas[i] ** 2 + sigma_neighbors ** 2
 
-        # Regularized kernel with symmetrized sigma
+        # Low-order algebraic regularized Biot-Savart kernel (Rosenhead-Moore):
+        #   K = 1 / (4 pi (r^2 + sigma_ij^2)^{3/2})
         denominator = (r_squared + sigma_ij_sq[:, np.newaxis]) ** 1.5 + 1e-12
-
-        # Viscous cutoff function (symmetric)
-        cutoff_func = 1.0 - np.exp(-r_squared / sigma_ij_sq[:, np.newaxis])
-
-        # Biot-Savart kernel
-        K = cutoff_func / (4 * np.pi * denominator)
+        K = 1.0 / (4 * np.pi * denominator)
 
         # Cross product: omega x r
         cross_products = np.cross(omega_neighbors, r_vecs)
@@ -279,13 +290,16 @@ def _apply_diffusion_numpy(
     vorticities: np.ndarray,
     sigmas: np.ndarray,
     nu: float,
+    dt: float,
     spatial_tree: Optional["cKDTree"] = None,
     search_multiplier: float = 4.0
 ) -> np.ndarray:
     """
-    Vectorized PSE diffusion using NumPy.
+    Relaxation-based viscous diffusion using NumPy.
 
-    Falls back to this when Numba is not available.
+    Falls back to this when Numba is not available.  See the Numba variant for
+    the approximation used (relaxation toward the local Gaussian-weighted mean
+    over a timestep dt; not strictly conservative PSE).
     """
     n = positions.shape[0]
     if n == 0:
@@ -322,7 +336,8 @@ def _apply_diffusion_numpy(
         weights /= weight_sum
         omega_avg = np.average(neighbor_omega, axis=0, weights=weights)
 
-        diffusion_rate = 2.0 * nu / (sigmas[i] ** 2 + 1e-12)
+        # Time-consistent relaxation fraction (dimensionless), clamped to <= 1.
+        diffusion_rate = min(1.0, 2.0 * nu * dt / (sigmas[i] ** 2 + 1e-12))
         new_vorticities[i] += diffusion_rate * (omega_avg - vorticities[i])
 
     return new_vorticities
@@ -589,13 +604,20 @@ class VortexParticleField:
                 self._positions, self._vorticities, self._sigmas, self._spatial_tree
             )
 
-    def apply_diffusion(self):
+    def apply_diffusion(self, dt: float = 0.05):
         """
-        Apply viscous diffusion using Particle Strength Exchange (PSE).
+        Apply viscous diffusion over a timestep dt.
 
-        Models: d(omega)/dt = nu * nabla^2(omega)
+        Approximates d(omega)/dt = nu * nabla^2(omega) by relaxation toward the
+        local Gaussian-weighted mean vorticity (see the kernel docstrings for the
+        approximation and its limitations).
 
         OPTIMIZED: Uses Numba JIT compilation when available.
+
+        Parameters
+        ----------
+        dt : float
+            Timestep in seconds
         """
         n = len(self._positions)
         if n == 0:
@@ -607,12 +629,13 @@ class VortexParticleField:
         # Use Numba-accelerated version if available
         if HAS_NUMBA and n > 100:
             self._vorticities = _apply_diffusion_numba(
-                self._positions, self._vorticities, self._sigmas, self.hydraulics.nu
+                self._positions, self._vorticities, self._sigmas,
+                self.hydraulics.nu, dt
             )
         else:
             self._vorticities = _apply_diffusion_numpy(
                 self._positions, self._vorticities, self._sigmas,
-                self.hydraulics.nu, self._spatial_tree
+                self.hydraulics.nu, dt, self._spatial_tree
             )
 
     def step(self, dt: float = 0.05):
@@ -647,7 +670,7 @@ class VortexParticleField:
         self._positions[:, 2] = np.clip(self._positions[:, 2], 0.1, self.H - 0.1)
 
         # Apply viscous diffusion
-        self.apply_diffusion()
+        self.apply_diffusion(dt)
 
         # Update core sizes based on observation (vectorized)
         self._sigmas = self._get_adaptive_core_sizes_batch(self._positions)
