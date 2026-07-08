@@ -39,12 +39,16 @@ OUTPUT_DIR = os.path.join(os.path.expanduser("~"), "Documents", "quantum_results
 def get_current_model() -> Optional[str]:
     """Try multiple methods to find currently open model."""
     cwd = os.getcwd()
-    inp_files = [f for f in os.listdir(cwd) if f.endswith(".inp")]
+    inp_files = sorted(f for f in os.listdir(cwd) if f.endswith(".inp"))
 
     if len(inp_files) == 1:
         return os.path.join(cwd, inp_files[0])
     elif len(inp_files) > 1:
-        print(f"Multiple .inp files found in {cwd}, using first")
+        # os.listdir order is arbitrary; sort for determinism and warn loudly so
+        # the wrong model in a multi-.inp project folder does not go unnoticed.
+        print(f"WARNING: multiple .inp files found in {cwd}: {inp_files}. "
+              f"Using '{inp_files[0]}' (alphabetical); pass the intended model "
+              f"explicitly if this is not correct.")
         return os.path.join(cwd, inp_files[0])
 
     # Check common locations
@@ -130,9 +134,19 @@ def run_quantum_analysis(
     timestep_count = 0
     quantum_analyses = 0
 
+    errored_nodes = set()
     try:
         with Simulation(model_file) as sim:
             nodes = Nodes(sim)
+
+            # Unit-system guard: QuantumNode is hardwired to US units (ft, cfs,
+            # slug/ft^3, 32.2 ft/s^2). A metric (CMS/LPS) SWMM model returns
+            # meters/cms from pyswmm, which would be silently mis-analyzed.
+            flow_units = getattr(sim, "flow_units", "CFS")
+            if flow_units not in ("CFS", "GPM", "MGD"):
+                print(f"WARNING: model FLOW_UNITS = {flow_units} (non-US). This "
+                      f"tool assumes US units (feet, cfs); results for this model "
+                      f"will be INCORRECT. Convert the model to US units first.")
 
             for step in sim:
                 timestep_count += 1
@@ -162,11 +176,15 @@ def run_quantum_analysis(
                             all_results.append(result)
 
                     except KeyError:
-                        if timestep_count == 1:
+                        if node_id not in errored_nodes:
+                            errored_nodes.add(node_id)
                             print(f"Node '{node_id}' not found in model")
                     except Exception as e:
-                        if timestep_count == 1:
-                            print(f"Error at {node_id}: {e}")
+                        # Surface the first error for each node (errors often only
+                        # appear once a node wets up, past timestep 1).
+                        if node_id not in errored_nodes:
+                            errored_nodes.add(node_id)
+                            print(f"Error at {node_id} (t={timestep_count}): {e}")
 
                 if timestep_count % 100 == 0:
                     print(f"Timestep {timestep_count} | Analyses: {quantum_analyses}")

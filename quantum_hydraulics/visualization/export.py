@@ -102,6 +102,12 @@ def export_animation(
             format = "mp4"
             output_path = output_path + ".mp4"
 
+    # Guard degenerate arguments (interval = 1000 // fps divides by zero at
+    # fps=0; frames=0 produces an empty/degenerate animation).
+    if n_frames <= 0:
+        raise ValueError(f"n_frames must be positive, got {n_frames}")
+    fps = max(int(fps), 1)
+
     # Create figure
     fig, axes = create_figure_layout(theme)
 

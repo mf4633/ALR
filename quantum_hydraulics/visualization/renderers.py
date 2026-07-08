@@ -145,7 +145,8 @@ def plot_plan_view(
         s=sizes,
         alpha=0.8,
         vmin=0,
-        vmax=np.percentile(energies, 95) if len(energies) > 0 else 1,
+        vmax=(np.nanpercentile(energies, 95)
+              if len(energies) > 0 and np.any(np.isfinite(energies)) else 1),
         linewidths=0,
     )
 
@@ -240,16 +241,18 @@ def plot_plan_view(
     if old_legend is not None:
         old_legend.remove()
 
+    # Marker area is 1200/sigma^2, so a SMALL sigma (high resolution) draws a
+    # LARGE dot. Label the handles to match that mapping (previously inverted).
     legend_elements = [
         Line2D(
             [0], [0], marker="o", color="w",
             markerfacecolor=theme.accent_primary,
-            markersize=4, linestyle="", label="High Resolution (small sigma)"
+            markersize=10, linestyle="", label="High Resolution (small sigma)"
         ),
         Line2D(
             [0], [0], marker="o", color="w",
             markerfacecolor=theme.accent_primary,
-            markersize=10, linestyle="", label="Low Resolution (large sigma)"
+            markersize=4, linestyle="", label="Low Resolution (large sigma)"
         ),
     ]
     ax.legend(
