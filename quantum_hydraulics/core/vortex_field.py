@@ -472,6 +472,14 @@ class VortexParticleField:
         self._volumes = np.full(len(self._positions), self._ref_volume,
                                 dtype=np.float64)
 
+        # Base (ambient) particle count, fixed at seeding.  Pier shedding appends
+        # transient wake particles after this block; ``max_shed_particles`` caps
+        # how many are retained so a long run with an active pier does not grow
+        # the particle array without bound.  The oldest shed particles (lowest
+        # appended indices) are culled first; the ambient field is never touched.
+        self._n_base = len(self._positions)
+        self.max_shed_particles = 4 * self.n_particles
+
     def _reference_particle_volume(self) -> float:
         """Mean domain volume per particle (ft^3); the seed-time volume weight."""
         n = max(len(self._positions), 1)
@@ -829,6 +837,20 @@ class VortexParticleField:
                         self._volumes,
                         np.full(len(new_pos), self._ref_volume),
                     ])
+
+            # Bound shed-particle accumulation: retain at most max_shed_particles
+            # transient particles, culling the oldest (lowest appended indices).
+            # Skipped under refinement, which reorders the arrays.
+            if not self.enable_refinement:
+                excess = (len(self._positions) - self._n_base) - self.max_shed_particles
+                if excess > 0:
+                    keep = np.ones(len(self._positions), dtype=bool)
+                    keep[self._n_base:self._n_base + excess] = False
+                    self._positions = self._positions[keep]
+                    self._vorticities = self._vorticities[keep]
+                    self._sigmas = self._sigmas[keep]
+                    self._ages = self._ages[keep]
+                    self._volumes = self._volumes[keep]
 
         # Store trail for visualization
         self._trail_frequency += 1
@@ -1236,6 +1258,7 @@ class VortexParticleField:
         self._ref_volume = self._reference_particle_volume()
         self._volumes = np.full(len(self._positions), self._ref_volume,
                                 dtype=np.float64)
+        self._n_base = len(self._positions)
 
     def __repr__(self) -> str:
         return (

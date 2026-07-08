@@ -214,25 +214,25 @@ def compute_degradation(tier1_metrics, upstream_mask, downstream_mask,
     tr_up = float(tier1_metrics.transport_rate[upstream_mask].mean())
     tr_dn = float(tier1_metrics.transport_rate[downstream_mask].mean())
 
-    deficit = tr_dn - tr_up  # lb/ft/s
+    deficit = tr_dn - tr_up  # lb/ft/s (mass transport per unit width)
 
-    # Convert to annual degradation depth
-    # transport_rate is lb/ft/s per unit width
-    # Volume rate = transport_rate / (rho_s * g) in ft^3/ft/s... but MPM already
-    # returns mass flux.  Use the same approach as swmm_2d.py scour_depth:
-    #   scour_depth = q_v * hours * 3600 / (1 - porosity)
-    # where q_v = transport_rate / (rho_s * g) approximately
-    rho_s_g = 5.14 * G  # slug/ft3 * ft/s2 = lb/ft3/s2... need careful units
-    # Actually: transport_rate from MPM is already in lb/ft/s
-    # Volume flux q_v = transport_rate / (rho_s * g) in ft3/ft/s (approx)
-    # But simpler: use deficit as indicator, degradation ~ deficit * time / (rho_bulk * width)
-    # rho_bulk of sand ~ 100 lb/ft3 (compacted)
-    rho_bulk = 100.0  # lb/ft3
+    # Annual degradation depth from Exner sediment continuity:
+    #   dz/dt = (qs_out - qs_in) / ((1 - p) * rho_s * L)
+    # where qs is transport per unit width, rho_s the SEDIMENT (grain) weight
+    # density, and L the reach LENGTH over which the transport gradient acts.
+    # The reach length is the streamwise separation between the upstream and
+    # downstream reaches (from the cell x-coordinates); the transport is already
+    # per unit width, so channel width does not enter (it cancels in Exner).
+    x = tier1_metrics.x
+    x_up = float(x[upstream_mask].mean())
+    x_dn = float(x[downstream_mask].mean())
+    reach_length = max(abs(x_dn - x_up), 1.0)  # ft, floored to avoid /0
+    rho_s = 2.65 * 62.4  # quartz weight density, lb/ft^3 (grain, not bulk)
     if deficit > 0:
-        # ft3/ft/s of eroded volume per unit width
-        vol_rate = deficit / rho_bulk  # ft3/ft/s per unit width... rough
-        annual_depth = vol_rate * storm_hours_per_year * 3600 / (1.0 - porosity)
-        annual_depth = min(annual_depth, 10.0)  # cap
+        vol_rate = deficit / rho_s  # ft^3/ft/s eroded volume per unit width
+        annual_depth = (vol_rate * storm_hours_per_year * 3600.0
+                        / ((1.0 - porosity) * reach_length))
+        annual_depth = min(annual_depth, 10.0)  # sanity cap (ft/yr)
     else:
         annual_depth = 0.0
 

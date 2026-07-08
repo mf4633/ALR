@@ -132,14 +132,16 @@ def fall_velocity(D50_ft: float, temperature_F: float = 60.0) -> float:
     D_m = D50_ft * 0.3048  # convert to meters for Rubey
     sg = 2.65  # specific gravity of quartz
 
-    # Rubey's formula
+    # Rubey's formula.  For gravel and sand use the full Rubey expression; its
+    # viscous terms vanish for large d, giving the correct coarse-particle
+    # asymptote omega -> sqrt((2/3)(sg-1) g d) = 0.816*sqrt((sg-1) g d).
+    # (The previous gravel branch used a coefficient of 3.32 -- about 4x too
+    # high and discontinuous with the sand branch.)
     d = D50_ft
-    if d > 0.007:  # > 2mm, gravel regime
-        omega = 3.32 * np.sqrt((sg - 1.0) * G * d)
-    elif d > 0.0003:  # 0.1mm - 2mm, sand regime
+    if d > 0.0003:  # >= ~0.1 mm: sand and gravel (full Rubey)
         omega = np.sqrt((sg - 1.0) * G * d * 2.0 / 3.0 +
                         36.0 * nu_ft2 ** 2 / d ** 2) - 6.0 * nu_ft2 / d
-    else:  # fine silt
+    else:  # fine silt (Stokes)
         omega = (sg - 1.0) * G * d ** 2 / (18.0 * nu_ft2)
 
     return max(omega, 1e-6)

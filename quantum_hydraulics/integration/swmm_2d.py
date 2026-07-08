@@ -92,6 +92,9 @@ def _vectorized_colebrook_white(Re, epsilon_D, max_iter=20, tol=1e-8):
 
 def _vectorized_scour_risk(bed_shear, tau_c, steepness=2.5, midpoint=1.0):
     """Calibrated logistic scour risk and excess shear ratio for arrays."""
+    if tau_c <= 0:
+        z = np.zeros_like(np.asarray(bed_shear, dtype=float))
+        return z, z
     excess = bed_shear / tau_c
     risk = 1.0 / (1.0 + np.exp(-steepness * (excess - midpoint)))
     return np.clip(risk, 0.0, 1.0), excess
@@ -115,7 +118,9 @@ def _vectorized_meyer_peter_muller(bed_shear, tau_c, d_ft, rho_s):
     denom = (rho_s - RHO) * G * d_ft
 
     tau_star = np.where(denom > 0, bed_shear / denom, 0.0)
-    tau_star_c = tau_c / denom if denom > 0 else 0.047
+    # Array-safe (denom / d_ft may be arrays); the scalar `if denom > 0`
+    # raised ValueError on array input.
+    tau_star_c = np.where(denom > 0, tau_c / np.where(denom > 0, denom, 1.0), 0.047)
 
     active = tau_star > tau_star_c
     excess = np.maximum(tau_star - tau_star_c, 0.0)
@@ -169,6 +174,9 @@ class CellMetrics:
         arr = getattr(self, metric)
         if arr is None:
             raise ValueError(f"Metric '{metric}' not computed")
+        # Rank descending, but push NaNs to the bottom (argsort places them
+        # last ascending, so a plain reverse would rank them as top hotspots).
+        arr = np.where(np.isnan(arr), -np.inf, arr)
         idx = np.argsort(arr)[::-1]
         return idx[:top_n]
 
@@ -591,18 +599,22 @@ class SWMM2DPostProcessor:
             if compute_gradients:
                 mesh.compute_velocity_gradients()
 
-            # Track peaks
+            # Track element-wise peak envelopes, and select the Tier 2 target as
+            # the timestep containing the single highest-velocity hotspot (not a
+            # majority-of-cells vote, which could miss the true peak cell).
+            t_max_v = float(np.nanmax(metrics.v_mag)) if metrics.v_mag.size else 0.0
             if peak_v_mag is None:
                 peak_v_mag = metrics.v_mag.copy()
                 peak_bed_shear = metrics.bed_shear.copy()
                 peak_scour_risk = metrics.scour_risk.copy()
                 peak_time = t_label
+                peak_max_v = t_max_v
             else:
-                update_mask = metrics.v_mag > peak_v_mag
                 peak_v_mag = np.maximum(peak_v_mag, metrics.v_mag)
                 peak_bed_shear = np.maximum(peak_bed_shear, metrics.bed_shear)
                 peak_scour_risk = np.maximum(peak_scour_risk, metrics.scour_risk)
-                if np.sum(update_mask) > np.sum(~update_mask):
+                if t_max_v > peak_max_v:
+                    peak_max_v = t_max_v
                     peak_time = t_label
 
         # Run Tier 2 on the peak timestep
