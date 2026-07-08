@@ -427,6 +427,26 @@ class VortexParticleField:
         # Initialize particles
         self._seed_particles()
 
+        # Volume element carried by each particle.  A vortex particle represents
+        # the vorticity integrated over a finite region: strength = omega * Vol
+        # (units of circulation * length), which is the ``dV`` in the Biot-Savart
+        # integral.  Without it the discretized sum carries the wrong units and
+        # its magnitude grows like sqrt(N) with particle count.  Use the mean
+        # domain volume per particle as the weight.
+        #
+        # NOTE: this corrects the units/discretization, but it does NOT by itself
+        # make the induced field converge with N.  The seeded vorticity is a
+        # random-phase turbulence proxy, so the net induced velocity is a random
+        # walk that scales like 1/sqrt(N) once volume-weighted.  A discretization-
+        # independent field requires a coherent (resolved) vorticity distribution,
+        # not random seeds -- see LIMITATIONS.md.
+        self.particle_volume = self._reference_particle_volume()
+
+    def _reference_particle_volume(self) -> float:
+        """Mean domain volume per particle (ft^3), used as the strength weight."""
+        n = max(len(self._positions), 1)
+        return (self.L * self.W * self.H) / n
+
     def _build_velocity_lut(self, n_points: int = 200):
         """Pre-compute velocity profile lookup table for fast interpolation."""
         self._velocity_lut_z = np.linspace(0, self.H, n_points)
@@ -578,6 +598,10 @@ class VortexParticleField:
         Uses Biot-Savart law with regularized kernel:
         v = (1/4pi) * integral( (omega x r) / |r|^3 dV )
 
+        The integral is discretized as a sum over particles, each contributing
+        its strength omega_j * Vol_j (see ``particle_volume``); the volume weight
+        makes the result independent of the number of particles used.
+
         OPTIMIZED: Uses Numba JIT compilation when available.
 
         Returns
@@ -596,13 +620,16 @@ class VortexParticleField:
 
         # Use Numba-accelerated version if available
         if HAS_NUMBA and n > 100:
-            return _compute_velocity_induction_numba(
+            velocities = _compute_velocity_induction_numba(
                 self._positions, self._vorticities, self._sigmas
             )
         else:
-            return _compute_velocity_induction_numpy(
+            velocities = _compute_velocity_induction_numpy(
                 self._positions, self._vorticities, self._sigmas, self._spatial_tree
             )
+
+        # Weight by the per-particle volume element (strength = omega * Vol)
+        return velocities * self.particle_volume
 
     def apply_diffusion(self, dt: float = 0.05):
         """
@@ -825,6 +852,7 @@ class VortexParticleField:
         self.min_sigma = hydraulics.eta_kolmogorov * 3
         self._build_velocity_lut()
         self._seed_particles()
+        self.particle_volume = self._reference_particle_volume()
 
     def __repr__(self) -> str:
         return (

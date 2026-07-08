@@ -56,6 +56,38 @@ It does **not** include:
 | Single precision particles | Accumulation errors over time | Reset simulation for long runs |
 | No parallel processing | Single-threaded only | Use smaller domains |
 
+### Induced-Velocity Field Is Not Discretization-Independent
+
+The vorticity field is seeded as a **random-phase turbulence proxy** (random
+orientations drawn per particle), not a coherent resolved vorticity
+distribution. The Biot-Savart induction now correctly weights each particle by
+its volume element (strength = omega * Vol), which fixes the units and the
+previous sqrt(N) growth of the induced velocity with particle count. However,
+because the seeds are random-phase, the *net* induced velocity is a random walk
+whose magnitude scales like 1/sqrt(N). It therefore does **not** converge to a
+fixed value as particles are added.
+
+Consequences:
+- The adaptive-resolution ("ALR") behavior concentrates core size (sigma) near
+  observation zones, but shrinking sigma without adding particles does not add
+  spatial degrees of freedom; it does not produce a mesh-convergent solution.
+- Claims of "same answer with fewer particles" hold only for the qualitative,
+  volume-weighted statistics, not for a pointwise-convergent velocity field.
+
+**Two induction kernels exist.** `core/vortex_field.py` (the 1D/ALR field) and
+`integration/swmm_node.py` (`_compute_velocity_induction_fast`, used by the 2D
+Tier 2 pipeline) implement Biot-Savart separately. The core version has been
+corrected (symmetrized variable core, single algebraic regularization, volume
+weight). The `swmm_node.py` copy is **left unchanged on purpose**: the 2D scour
+model is empirically calibrated around its current magnitudes -- effective
+friction velocity is `max(u*_turb, 1.2 * u*_base)` and scour uses a tuned
+logistic (`scour_steepness`, `scour_midpoint`). Re-scaling that kernel (e.g.
+adding the volume weight) would push `u*_turb` past the `1.2x` floor and change
+reported scour without a corresponding recalibration against reference data.
+These two kernels should eventually be unified and the 2D model recalibrated;
+until then, treat the 2D Tier 2 shear augmentation as a calibrated empirical
+correction, not a first-principles turbulence closure.
+
 ### Validation Gaps
 
 | Gap | Status | Notes |
