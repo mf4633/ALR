@@ -1,4 +1,9 @@
 """
+DEPRECATED / LEGACY -- do not use for analysis.
+================================================
+This is an early standalone 2D toy, NOT imported by the ``quantum_hydraulics``
+package and superseded by it. Kept only for reference.
+
 Quantum-Inspired Turbulent Flow Simulator
 ==========================================
 

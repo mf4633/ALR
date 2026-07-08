@@ -1,4 +1,13 @@
 """
+DEPRECATED / LEGACY -- do not use for analysis.
+================================================
+This standalone monolith predates the ``quantum_hydraulics`` package and is NOT
+imported by it. It still contains physics bugs corrected in the package
+(TKE = 0.5*V^2; a non-standard double-regularized Biot-Savart kernel; viscous
+diffusion applied with no dt; Biot-Savart missing the particle volume element;
+a discontinuous velocity profile; and a Biot-Savart displacement-sign
+inconsistency). Use ``quantum_hydraulics`` instead. Kept only for reference.
+
 ULTIMATE QUANTUM-INSPIRED VORTEX PARTICLE STREAM SIMULATOR
 ===========================================================
 
