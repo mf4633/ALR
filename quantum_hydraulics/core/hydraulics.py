@@ -226,10 +226,19 @@ class HydraulicsEngine:
 
         These are exact from dimensional analysis.
         """
-        # Turbulent kinetic energy per unit mass
-        self.TKE = 0.5 * self.V_mean ** 2
+        # Turbulent kinetic energy per unit mass.
+        # TKE is fluctuation energy (1/2 <u'_i u'_i>), NOT half the mean velocity
+        # squared. In open-channel flow it scales with the friction velocity via
+        # the standard k-epsilon wall relation k = u*^2 / sqrt(C_mu) with the
+        # equilibrium constant C_mu = 0.09 (Nezu & Nakagawa 1993). This yields a
+        # depth-scale TKE roughly 3.3 * u*^2, i.e. a few percent of V^2 for typical
+        # channels, consistent with measured turbulence intensities.
+        C_mu = 0.09
+        self.TKE = self.u_star ** 2 / np.sqrt(C_mu)
 
-        # Turbulent dissipation rate: epsilon ~ V^3/L
+        # Turbulent dissipation rate. Large-eddy cascade estimate epsilon ~ U^3/L,
+        # with the mean velocity setting the large-eddy velocity scale and the
+        # hydraulic radius the integral length scale (production ~ dissipation).
         if self.R > 0:
             self.epsilon = self.V_mean ** 3 / self.R
         else:
@@ -285,14 +294,18 @@ class HydraulicsEngine:
         # von Karman constant (universal)
         kappa = 0.41
 
-        if z < 0.2 * self.depth and z > z0:
+        # Seam between inner log law and outer power law
+        z_t = max(0.2 * self.depth, z0 * 1.001)
+        u_t = (self.u_star / kappa) * np.log(z_t / z0)
+
+        if z < z_t and z > z0:
             # Inner layer: log law
             # u/u* = (1/kappa) ln(z/z0)
             u = (self.u_star / kappa) * np.log(z / z0)
         else:
-            # Outer layer: power law
-            # u/U = (z/h)^(1/n) where n ~ 7 for turbulent flow
-            u = self.V_mean * (z / self.depth) ** (1 / 7)
+            # Outer layer: 1/7-power wake anchored to the log-law value at the
+            # seam so the profile is continuous (no velocity jump at z = z_t).
+            u = u_t * (z / z_t) ** (1 / 7)
 
         return max(0.0, u)
 
@@ -319,18 +332,23 @@ class HydraulicsEngine:
         z0 = max(self.ks / 30.0, 1e-6)
         kappa = 0.41
 
+        # Seam between inner log law and outer power law
+        z_t = max(0.2 * self.depth, z0 * 1.001)
+        u_t = (self.u_star / kappa) * np.log(z_t / z0)
+
         # Masks for different regions
         zero_mask = z <= 0
-        inner_mask = (z < 0.2 * self.depth) & (z > z0) & ~zero_mask
+        inner_mask = (z < z_t) & (z > z0) & ~zero_mask
         outer_mask = ~zero_mask & ~inner_mask
 
         # Inner layer: log law
         if np.any(inner_mask):
             u[inner_mask] = (self.u_star / kappa) * np.log(z[inner_mask] / z0)
 
-        # Outer layer: power law
+        # Outer layer: 1/7-power wake anchored to the log-law value at the seam
+        # so the profile is continuous (no velocity jump at z = z_t).
         if np.any(outer_mask):
-            u[outer_mask] = self.V_mean * (z[outer_mask] / self.depth) ** (1 / 7)
+            u[outer_mask] = u_t * (z[outer_mask] / z_t) ** (1 / 7)
 
         return np.maximum(u, 0.0)
 

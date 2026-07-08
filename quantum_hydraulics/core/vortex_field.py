@@ -1,8 +1,8 @@
 """
 VortexParticleField - 3D vortex particle system with adaptive resolution.
 
-Implements Biot-Savart law for velocity induction and
-Particle Strength Exchange (PSE) for viscous diffusion.
+Implements the regularized Biot-Savart law for velocity induction and a
+relaxation-based approximation of viscous diffusion (see apply_diffusion).
 
 OPTIMIZED VERSION: Uses Structure-of-Arrays for 5-10x speedup.
 """
@@ -107,22 +107,24 @@ if HAS_NUMBA:
                 sigma_j_sq = sigmas[j] ** 2
 
                 # Symmetrized core size: sigma_ij^2 = sigma_i^2 + sigma_j^2
-                # (Barba & Rossi 2005, variable-blob Biot-Savart)
+                # (Barba et al. 2005, variable-blob Biot-Savart)
                 sigma_ij_sq = sigma_i_sq + sigma_j_sq
 
-                # Cutoff at max(sigma_i, sigma_j) * multiplier
-                cutoff_sq = cutoff_multiplier ** 2 * max(sigma_i_sq, sigma_j_sq)
+                # Cutoff at cutoff_multiplier * symmetrized core (consistent with
+                # the kernel width used below)
+                cutoff_sq = cutoff_multiplier ** 2 * sigma_ij_sq
                 if r_sq > cutoff_sq:
                     continue
 
-                # Regularized kernel with symmetrized sigma
+                # Low-order algebraic regularized Biot-Savart kernel:
+                #   K = 1 / (4 pi (r^2 + sigma_ij^2)^{3/2})
+                # This is the standard second-order algebraic (Rosenhead-Moore)
+                # smoothing; it is finite at r -> 0 and needs no extra cutoff
+                # function.  (The previous code multiplied this by a Gaussian
+                # 1 - exp(-r^2/sigma^2) factor, which does not correspond to any
+                # published blob and double-regularized the kernel.)
                 denom = (r_sq + sigma_ij_sq) ** 1.5 + 1e-12
-
-                # Viscous cutoff function (symmetric)
-                cutoff_func = 1.0 - np.exp(-r_sq / sigma_ij_sq)
-
-                # Biot-Savart kernel
-                K = cutoff_func / (4.0 * np.pi * denom)
+                K = 1.0 / (4.0 * np.pi * denom)
 
                 # Cross product: omega x r
                 ox, oy, oz = vorticities[j, 0], vorticities[j, 1], vorticities[j, 2]
@@ -142,10 +144,17 @@ if HAS_NUMBA:
         vorticities: np.ndarray,
         sigmas: np.ndarray,
         nu: float,
+        dt: float,
         search_multiplier: float = 4.0
     ) -> np.ndarray:
         """
-        Vectorized PSE diffusion with Numba acceleration.
+        Relaxation-based viscous diffusion with Numba acceleration.
+
+        Approximates d(omega)/dt = nu * laplacian(omega) by relaxing each
+        particle's vorticity toward the Gaussian-weighted local mean over a
+        timestep dt.  This is a smoothing approximation (it is not the strictly
+        conservative Particle Strength Exchange scheme); with molecular nu the
+        per-step change is negligible, as intended for the resolved scales here.
 
         Parameters
         ----------
@@ -157,6 +166,8 @@ if HAS_NUMBA:
             Particle core sizes, shape (N,)
         nu : float
             Kinematic viscosity
+        dt : float
+            Timestep in seconds
         search_multiplier : float
             Search radius as multiple of sigma
 
@@ -198,7 +209,11 @@ if HAS_NUMBA:
                 omega_avg[1] /= weight_sum
                 omega_avg[2] /= weight_sum
 
-                diffusion_rate = 2.0 * nu / (sigma_i_sq + 1e-12)
+                # Time-consistent relaxation fraction (dimensionless), clamped
+                # to <= 1 for stability.  Units: (1/s) * s = dimensionless.
+                diffusion_rate = 2.0 * nu * dt / (sigma_i_sq + 1e-12)
+                if diffusion_rate > 1.0:
+                    diffusion_rate = 1.0
 
                 new_vorticities[i, 0] = vorticities[i, 0] + diffusion_rate * (omega_avg[0] - vorticities[i, 0])
                 new_vorticities[i, 1] = vorticities[i, 1] + diffusion_rate * (omega_avg[1] - vorticities[i, 1])
@@ -257,14 +272,10 @@ def _compute_velocity_induction_numpy(
         # Symmetrized sigma: sigma_ij^2 = sigma_i^2 + sigma_j^2
         sigma_ij_sq = sigmas[i] ** 2 + sigma_neighbors ** 2
 
-        # Regularized kernel with symmetrized sigma
+        # Low-order algebraic regularized Biot-Savart kernel (Rosenhead-Moore):
+        #   K = 1 / (4 pi (r^2 + sigma_ij^2)^{3/2})
         denominator = (r_squared + sigma_ij_sq[:, np.newaxis]) ** 1.5 + 1e-12
-
-        # Viscous cutoff function (symmetric)
-        cutoff_func = 1.0 - np.exp(-r_squared / sigma_ij_sq[:, np.newaxis])
-
-        # Biot-Savart kernel
-        K = cutoff_func / (4 * np.pi * denominator)
+        K = 1.0 / (4 * np.pi * denominator)
 
         # Cross product: omega x r
         cross_products = np.cross(omega_neighbors, r_vecs)
@@ -279,13 +290,16 @@ def _apply_diffusion_numpy(
     vorticities: np.ndarray,
     sigmas: np.ndarray,
     nu: float,
+    dt: float,
     spatial_tree: Optional["cKDTree"] = None,
     search_multiplier: float = 4.0
 ) -> np.ndarray:
     """
-    Vectorized PSE diffusion using NumPy.
+    Relaxation-based viscous diffusion using NumPy.
 
-    Falls back to this when Numba is not available.
+    Falls back to this when Numba is not available.  See the Numba variant for
+    the approximation used (relaxation toward the local Gaussian-weighted mean
+    over a timestep dt; not strictly conservative PSE).
     """
     n = positions.shape[0]
     if n == 0:
@@ -322,7 +336,8 @@ def _apply_diffusion_numpy(
         weights /= weight_sum
         omega_avg = np.average(neighbor_omega, axis=0, weights=weights)
 
-        diffusion_rate = 2.0 * nu / (sigmas[i] ** 2 + 1e-12)
+        # Time-consistent relaxation fraction (dimensionless), clamped to <= 1.
+        diffusion_rate = min(1.0, 2.0 * nu * dt / (sigmas[i] ** 2 + 1e-12))
         new_vorticities[i] += diffusion_rate * (omega_avg - vorticities[i])
 
     return new_vorticities
@@ -369,13 +384,22 @@ class VortexParticleField:
         hydraulics: HydraulicsEngine,
         length: float = 200.0,
         n_particles: int = 6000,
+        seeding: str = "coherent",
     ):
         self.hydraulics = hydraulics
+        # Vorticity seeding mode. Default "coherent": deterministic mean-shear
+        # vorticity omega = du/dz, which gives the induced field a converged
+        # limit (see _seed_coherent and docs/ALR_REFINEMENT_DESIGN.md). Pass
+        # "random" for the legacy isotropic turbulence proxy (no converged limit;
+        # kept for reproducing earlier results). Note: refinement stays opt-in
+        # (enable_refinement=False) because it adds per-step cost and changes
+        # particle counts -- enable it when high in-zone resolution is needed.
+        self.seeding = seeding
         self.L = length
         self.W = hydraulics.width
         self.H = hydraulics.depth
 
-        # Observation zone (quantum measurement location)
+        # Observation zone (location of interest for resolution concentration)
         self.obs_center = np.array([length / 2, hydraulics.width / 2, hydraulics.depth / 2])
         self.obs_radius = 25.0
         self.observation_active = True
@@ -384,12 +408,25 @@ class VortexParticleField:
         # Optional pier bodies for vortex shedding
         self.pier_bodies: Optional[list] = None
 
+        # Adaptive Lagrangian refinement (flaw #2). When enabled, particles in
+        # observation zones whose overlap ratio h/sigma exceeds ``refine_split_ratio``
+        # are split conservatively (adding degrees of freedom), and over-dense
+        # particles below ``refine_merge_ratio`` are merged, capped at
+        # ``refine_n_max``. OFF by default -- see docs/ALR_REFINEMENT_DESIGN.md.
+        self.enable_refinement = False
+        self.refine_split_ratio = 1.4
+        self.refine_merge_ratio = 0.4
+        self.refine_stencil_frac = 0.7
+        self.refine_n_max: Optional[int] = None
+
         # Structure-of-Arrays particle storage (OPTIMIZED)
         self.n_particles = n_particles
         self._positions: np.ndarray = np.zeros((0, 3), dtype=np.float64)
         self._vorticities: np.ndarray = np.zeros((0, 3), dtype=np.float64)
         self._sigmas: np.ndarray = np.zeros(0, dtype=np.float64)
         self._ages: np.ndarray = np.zeros(0, dtype=np.float64)
+        # Per-particle volume element (ft^3); strength_j = omega_j * Vol_j.
+        self._volumes: np.ndarray = np.zeros(0, dtype=np.float64)
 
         # Core size parameters
         self.base_sigma = self.H / 5.0
@@ -410,7 +447,46 @@ class VortexParticleField:
         self._build_velocity_lut()
 
         # Initialize particles
-        self._seed_particles()
+        self._seed_field()
+
+        # Volume element carried by each particle.  A vortex particle represents
+        # the vorticity integrated over a finite region: strength = omega * Vol
+        # (units of circulation * length), which is the ``dV`` in the Biot-Savart
+        # integral.  Without it the discretized sum carries the wrong units and
+        # its magnitude grows like sqrt(N) with particle count.
+        #
+        # Volume is stored *per particle* so that refinement (splitting particles
+        # in observation zones) can subdivide a parent's volume among its
+        # children while conserving total strength.  At seeding the distribution
+        # is uniform, so every particle gets the mean domain volume per particle;
+        # this reproduces the earlier scalar-volume behaviour exactly (the kernel
+        # is linear in the source strength, so a uniform factor pulls out).
+        #
+        # NOTE: the volume weight corrects units/discretization but does NOT by
+        # itself make the induced field converge with N.  The seeded vorticity is
+        # a random-phase turbulence proxy, so the net induced velocity is a
+        # random walk (~1/sqrt(N) once volume-weighted).  A discretization-
+        # independent field also needs a coherent (resolved) vorticity
+        # distribution and true refinement -- see docs/ALR_REFINEMENT_DESIGN.md.
+        self._ref_volume = self._reference_particle_volume()
+        self._volumes = np.full(len(self._positions), self._ref_volume,
+                                dtype=np.float64)
+
+    def _reference_particle_volume(self) -> float:
+        """Mean domain volume per particle (ft^3); the seed-time volume weight."""
+        n = max(len(self._positions), 1)
+        return (self.L * self.W * self.H) / n
+
+    @property
+    def particle_volume(self) -> float:
+        """Mean per-particle volume (ft^3).
+
+        Backwards-compatible scalar view of ``_volumes``; equals the uniform
+        seed volume until refinement makes volumes non-uniform.
+        """
+        if len(self._volumes) == 0:
+            return self._reference_particle_volume()
+        return float(self._volumes.mean())
 
     def _build_velocity_lut(self, n_points: int = 200):
         """Pre-compute velocity profile lookup table for fast interpolation."""
@@ -424,6 +500,56 @@ class VortexParticleField:
         if self._velocity_lut_z is None:
             self._build_velocity_lut()
         return np.interp(z, self._velocity_lut_z, self._velocity_lut_v)
+
+    def _seed_field(self, seed: int = 42):
+        """Seed the vorticity field according to ``self.seeding``."""
+        if self.seeding == "coherent":
+            self._seed_coherent(seed)
+        else:
+            self._seed_particles(seed)
+
+    def _seed_coherent(self, seed: int = 42):
+        """
+        Seed a coherent (resolved) mean-shear vorticity field.
+
+        The mean streamwise flow ``u(z)`` has vorticity ``omega = curl(u) =
+        (0, du/dz, 0)`` -- a deterministic, spanwise vorticity sheet rather than
+        isotropic random turbulence.  Because the vorticity is a fixed function
+        of position (not zero-mean noise), the discrete Biot-Savart sum has a
+        non-trivial converged limit: the ensemble-mean induced velocity settles
+        on a stable value with signal-to-noise growing like sqrt(N), whereas the
+        random-phase seed averages to zero.  This is the seeding required before
+        refinement can be validated as convergent (see
+        docs/ALR_REFINEMENT_DESIGN.md).
+
+        Positions are drawn uniformly in the interior; only the vorticity differs
+        from the random seed.
+        """
+        rng = np.random.default_rng(seed)
+        n = self.n_particles
+
+        positions = np.column_stack([
+            rng.uniform(0.1 * self.L, 0.9 * self.L, n),
+            rng.uniform(0.1 * self.W, 0.9 * self.W, n),
+            rng.uniform(0.1 * self.H, 0.9 * self.H, n),
+        ])
+
+        # Mean-shear vorticity omega_y = du/dz via central difference on the
+        # (log-law + power-law) velocity profile.
+        dz = 0.01 * self.H
+        zc = positions[:, 2]
+        u_plus = self.hydraulics.velocity_profile_vectorized(zc + dz)
+        u_minus = self.hydraulics.velocity_profile_vectorized(
+            np.maximum(zc - dz, 1e-6))
+        dudz = (u_plus - u_minus) / (2.0 * dz)
+
+        vorticities = np.zeros((n, 3), dtype=np.float64)
+        vorticities[:, 1] = dudz
+
+        self._positions = positions
+        self._vorticities = vorticities
+        self._sigmas = self._get_adaptive_core_sizes_batch(positions)
+        self._ages = np.zeros(n, dtype=np.float64)
 
     def _seed_particles(self, seed: int = 42):
         """
@@ -519,7 +645,7 @@ class VortexParticleField:
 
     def get_adaptive_core_size(self, position: np.ndarray) -> float:
         """
-        Compute observation-dependent core size (THE QUANTUM PART).
+        Compute observation-dependent core size.
 
         Near observation zone: Small sigma -> high resolution
         Far from observation: Large sigma -> coarse approximation
@@ -563,6 +689,12 @@ class VortexParticleField:
         Uses Biot-Savart law with regularized kernel:
         v = (1/4pi) * integral( (omega x r) / |r|^3 dV )
 
+        The integral is discretized as a sum over particles, each contributing
+        its strength omega_j * Vol_j.  The volume weight is folded into the source
+        strength per particle, so non-uniform volumes (from refinement) are
+        handled directly and, for uniform volumes, the result is identical to
+        scaling by a single scalar.
+
         OPTIMIZED: Uses Numba JIT compilation when available.
 
         Returns
@@ -579,23 +711,42 @@ class VortexParticleField:
             self._spatial_tree = cKDTree(self._positions)
         self._tree_build_counter += 1
 
+        # Source strength = vorticity * per-particle volume element.  The kernel
+        # is linear in the source term, so weighting here applies Vol_j to each
+        # source particle j (the target's own volume does not affect its induced
+        # velocity).  Guard against hand-built state whose _volumes was not kept
+        # in sync with the particle arrays by falling back to a uniform volume.
+        vols = self._volumes
+        if len(vols) != n:
+            vols = np.full(n, self._ref_volume, dtype=np.float64)
+        strengths = self._vorticities * vols[:, np.newaxis]
+
         # Use Numba-accelerated version if available
         if HAS_NUMBA and n > 100:
-            return _compute_velocity_induction_numba(
-                self._positions, self._vorticities, self._sigmas
+            velocities = _compute_velocity_induction_numba(
+                self._positions, strengths, self._sigmas
             )
         else:
-            return _compute_velocity_induction_numpy(
-                self._positions, self._vorticities, self._sigmas, self._spatial_tree
+            velocities = _compute_velocity_induction_numpy(
+                self._positions, strengths, self._sigmas, self._spatial_tree
             )
 
-    def apply_diffusion(self):
-        """
-        Apply viscous diffusion using Particle Strength Exchange (PSE).
+        return velocities
 
-        Models: d(omega)/dt = nu * nabla^2(omega)
+    def apply_diffusion(self, dt: float = 0.05):
+        """
+        Apply viscous diffusion over a timestep dt.
+
+        Approximates d(omega)/dt = nu * nabla^2(omega) by relaxation toward the
+        local Gaussian-weighted mean vorticity (see the kernel docstrings for the
+        approximation and its limitations).
 
         OPTIMIZED: Uses Numba JIT compilation when available.
+
+        Parameters
+        ----------
+        dt : float
+            Timestep in seconds
         """
         n = len(self._positions)
         if n == 0:
@@ -607,12 +758,13 @@ class VortexParticleField:
         # Use Numba-accelerated version if available
         if HAS_NUMBA and n > 100:
             self._vorticities = _apply_diffusion_numba(
-                self._positions, self._vorticities, self._sigmas, self.hydraulics.nu
+                self._positions, self._vorticities, self._sigmas,
+                self.hydraulics.nu, dt
             )
         else:
             self._vorticities = _apply_diffusion_numpy(
                 self._positions, self._vorticities, self._sigmas,
-                self.hydraulics.nu, self._spatial_tree
+                self.hydraulics.nu, dt, self._spatial_tree
             )
 
     def step(self, dt: float = 0.05):
@@ -647,10 +799,14 @@ class VortexParticleField:
         self._positions[:, 2] = np.clip(self._positions[:, 2], 0.1, self.H - 0.1)
 
         # Apply viscous diffusion
-        self.apply_diffusion()
+        self.apply_diffusion(dt)
 
         # Update core sizes based on observation (vectorized)
         self._sigmas = self._get_adaptive_core_sizes_batch(self._positions)
+
+        # Adaptive Lagrangian refinement (opt-in; no-op when disabled)
+        if self.enable_refinement:
+            self.refine()
 
         # Pier vortex shedding (optional)
         if self.pier_bodies:
@@ -668,6 +824,11 @@ class VortexParticleField:
                     self._ages = np.concatenate([
                         self._ages, np.zeros(len(new_pos))
                     ])
+                    # Shed particles carry the reference (seed-time) volume.
+                    self._volumes = np.concatenate([
+                        self._volumes,
+                        np.full(len(new_pos), self._ref_volume),
+                    ])
 
         # Store trail for visualization
         self._trail_frequency += 1
@@ -682,6 +843,276 @@ class VortexParticleField:
         """Compute particle energies: |omega|^2 * sigma^3"""
         omega_mag_sq = np.sum(self._vorticities ** 2, axis=1)
         return omega_mag_sq * self._sigmas ** 3
+
+    def overlap_ratio(self, mask: Optional[np.ndarray] = None) -> dict:
+        """
+        Diagnose the vortex-blob overlap condition h / sigma.
+
+        Vortex particle methods are only accurate when neighbouring blobs
+        overlap, i.e. the local inter-particle spacing ``h`` is at most of order
+        the core size ``sigma`` (h / sigma <~ 1).  Reducing sigma in an
+        observation zone *without* adding particles leaves ``h`` unchanged, so
+        h / sigma rises and the field becomes under-resolved exactly where the
+        highest resolution is advertised.  This method quantifies that: values
+        well above 1 indicate the overlap condition is violated.
+
+        Parameters
+        ----------
+        mask : np.ndarray, optional
+            Boolean mask selecting a subset of particles (e.g. an observation
+            zone).  If omitted, all particles are used.
+
+        Returns
+        -------
+        dict
+            ``{"mean", "median", "frac_gt_1", "n"}`` for h / sigma over the
+            selected particles.  Empty-safe (returns NaNs / 0 for < 2 points).
+        """
+        pos = self._positions
+        sig = self._sigmas
+        if mask is not None:
+            pos = pos[mask]
+            sig = sig[mask]
+        n = len(pos)
+        if n < 2:
+            return {"mean": float("nan"), "median": float("nan"),
+                    "frac_gt_1": float("nan"), "n": n}
+
+        if cKDTree is not None:
+            tree = cKDTree(pos)
+            # k=2: nearest neighbour excluding self
+            dist, _ = tree.query(pos, k=2)
+            h = dist[:, 1]
+        else:
+            # O(N^2) fallback
+            h = np.empty(n)
+            for i in range(n):
+                d = np.linalg.norm(pos - pos[i], axis=1)
+                d[i] = np.inf
+                h[i] = d.min()
+
+        ratio = h / np.maximum(sig, 1e-12)
+        return {
+            "mean": float(ratio.mean()),
+            "median": float(np.median(ratio)),
+            "frac_gt_1": float(np.mean(ratio > 1.0)),
+            "n": int(n),
+        }
+
+    def observation_zone_mask(self, factor: float = 1.0) -> np.ndarray:
+        """
+        Boolean mask of particles inside the (single- or multi-zone) observation
+        region, each zone taken as a sphere of ``factor * radius``.
+
+        Returns an all-False mask when observation is inactive.
+        """
+        n = len(self._positions)
+        if not self.observation_active or n == 0:
+            return np.zeros(n, dtype=bool)
+
+        zones = self.obs_zones if self.obs_zones is not None else [
+            (self.obs_center, self.obs_radius)
+        ]
+        mask = np.zeros(n, dtype=bool)
+        for center, radius in zones:
+            center = np.asarray(center, dtype=np.float64)
+            dist = np.linalg.norm(self._positions - center, axis=1)
+            mask |= dist < (factor * radius)
+        return mask
+
+    # ------------------------------------------------------------------
+    # Adaptive Lagrangian refinement (flaw #2) -- opt-in, default off
+    # ------------------------------------------------------------------
+
+    def _nearest_neighbor_spacing(self) -> np.ndarray:
+        """Distance from each particle to its nearest neighbour, shape (N,)."""
+        pos = self._positions
+        n = len(pos)
+        if n < 2:
+            return np.full(n, np.inf)
+        if cKDTree is not None:
+            tree = cKDTree(pos)
+            dist, _ = tree.query(pos, k=2)
+            return dist[:, 1]
+        h = np.empty(n)
+        for i in range(n):
+            d = np.linalg.norm(pos - pos[i], axis=1)
+            d[i] = np.inf
+            h[i] = d.min()
+        return h
+
+    @staticmethod
+    def _octahedral_stencil() -> np.ndarray:
+        """Unit octahedral split stencil (centre + 6 axis points), sum = 0."""
+        return np.array([
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0], [-1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0], [0.0, -1.0, 0.0],
+            [0.0, 0.0, 1.0], [0.0, 0.0, -1.0],
+        ])
+
+    def _split_particles(self, idx: np.ndarray) -> int:
+        """
+        Split the particles at ``idx`` into 7 children each (octahedral stencil).
+
+        Conservation (exact, independent of stencil radius, because the stencil
+        is centrally symmetric):
+          - total volume: children share the parent volume (Vol/7 each);
+          - zeroth strength moment: sum(omega*Vol) unchanged (omega inherited,
+            volume split);
+          - first strength moment: strength-weighted centroid = parent position.
+
+        Returns the net change in particle count.
+        """
+        idx = np.asarray(idx, dtype=np.int64)
+        if idx.size == 0:
+            return 0
+
+        M = 7
+        stencil = self._octahedral_stencil()             # (7, 3)
+        keep = np.ones(len(self._positions), dtype=bool)
+        keep[idx] = False
+
+        P = self._positions[idx]                          # (k, 3)
+        O = self._vorticities[idx]
+        S = self._sigmas[idx]
+        V = self._volumes[idx]
+        A = self._ages[idx]
+
+        radii = self.refine_stencil_frac * S              # (k,)
+        # children positions: P_i + radius_i * stencil_k
+        child_pos = (P[:, None, :]
+                     + radii[:, None, None] * stencil[None, :, :]).reshape(-1, 3)
+        child_omega = np.repeat(O, M, axis=0)             # vorticity inherited
+        child_sigma = np.repeat(S, M)                     # core size inherited
+        child_vol = np.repeat(V / M, M)                   # volume split
+        child_age = np.repeat(A, M)
+
+        self._positions = np.vstack([self._positions[keep], child_pos])
+        self._vorticities = np.vstack([self._vorticities[keep], child_omega])
+        self._sigmas = np.concatenate([self._sigmas[keep], child_sigma])
+        self._volumes = np.concatenate([self._volumes[keep], child_vol])
+        self._ages = np.concatenate([self._ages[keep], child_age])
+
+        return idx.size * (M - 1)
+
+    def _merge_particles(self, pairs: np.ndarray) -> int:
+        """
+        Merge disjoint particle pairs, conserving total strength and volume.
+
+        Each merged particle carries the summed volume and the summed vector
+        strength (omega*Vol), so the total zeroth moment sum(omega*Vol) and the
+        total volume are exactly preserved; it is placed at the
+        strength-magnitude-weighted centroid (first moment approximate).
+
+        ``pairs`` is an (m, 2) int array of disjoint indices. Returns the net
+        change in particle count (negative).
+        """
+        pairs = np.asarray(pairs, dtype=np.int64)
+        if pairs.size == 0:
+            return 0
+
+        i, j = pairs[:, 0], pairs[:, 1]
+        Vi, Vj = self._volumes[i], self._volumes[j]
+        Oi, Oj = self._vorticities[i], self._vorticities[j]
+        # Vector strengths alpha = omega * Vol
+        Ai = Oi * Vi[:, None]
+        Aj = Oj * Vj[:, None]
+        V_new = Vi + Vj
+        A_new = Ai + Aj
+        O_new = A_new / V_new[:, None]                    # conserves sum(omega*Vol)
+        # strength-magnitude-weighted centroid
+        wi = np.linalg.norm(Ai, axis=1)
+        wj = np.linalg.norm(Aj, axis=1)
+        wsum = np.maximum(wi + wj, 1e-30)
+        P_new = (self._positions[i] * wi[:, None]
+                 + self._positions[j] * wj[:, None]) / wsum[:, None]
+        S_new = (self._sigmas[i] * Vi + self._sigmas[j] * Vj) / V_new
+        Age_new = np.maximum(self._ages[i], self._ages[j])
+
+        drop = np.zeros(len(self._positions), dtype=bool)
+        drop[i] = True
+        drop[j] = True
+        self._positions = np.vstack([self._positions[~drop], P_new])
+        self._vorticities = np.vstack([self._vorticities[~drop], O_new])
+        self._sigmas = np.concatenate([self._sigmas[~drop], S_new])
+        self._volumes = np.concatenate([self._volumes[~drop], V_new])
+        self._ages = np.concatenate([self._ages[~drop], Age_new])
+
+        return -pairs.shape[0]
+
+    def refine(self) -> dict:
+        """
+        Run one adaptive-refinement pass (split under-resolved in-zone particles,
+        merge over-dense ones), respecting ``refine_n_max``.
+
+        No-op unless ``enable_refinement`` is True. Returns a summary dict with
+        the number split/merged and the resulting particle count.
+
+        Total vortex strength sum(omega*Vol) and total volume are conserved by
+        the split step exactly and by the merge step to the zeroth moment.
+        """
+        summary = {"split": 0, "merged": 0, "n": len(self._positions)}
+        if not self.enable_refinement or len(self._positions) < 2:
+            return summary
+
+        n_max = self.refine_n_max or (5 * self.n_particles)
+        h = self._nearest_neighbor_spacing()
+        ratio = h / np.maximum(self._sigmas, 1e-12)
+
+        # --- split: in-zone particles that violate overlap ---
+        in_zone = self.observation_zone_mask()
+        split_candidates = np.where(in_zone & (ratio > self.refine_split_ratio))[0]
+        if split_candidates.size > 0:
+            # respect the population cap (each split adds 6 particles)
+            budget = max(0, (n_max - len(self._positions)) // 6)
+            if split_candidates.size > budget:
+                # split the worst-overlap particles first
+                order = np.argsort(ratio[split_candidates])[::-1]
+                split_candidates = split_candidates[order[:budget]]
+            if split_candidates.size > 0:
+                added = self._split_particles(split_candidates)
+                summary["split"] = split_candidates.size
+                # keep particles inside the domain after placing children
+                self._apply_domain_bounds()
+
+        # --- merge: over-dense particles (outside observation zones) ---
+        h = self._nearest_neighbor_spacing()
+        ratio = h / np.maximum(self._sigmas, 1e-12)
+        dense = np.where((~self.observation_zone_mask())
+                         & (ratio < self.refine_merge_ratio))[0]
+        if dense.size >= 2 and cKDTree is not None:
+            pairs = self._disjoint_nearest_pairs(dense)
+            if pairs.size > 0:
+                self._merge_particles(pairs)
+                summary["merged"] = pairs.shape[0]
+
+        summary["n"] = len(self._positions)
+        return summary
+
+    def _disjoint_nearest_pairs(self, idx: np.ndarray) -> np.ndarray:
+        """Greedily pair each candidate with its nearest candidate neighbour,
+        using each particle at most once. Returns an (m, 2) index array."""
+        idx = np.asarray(idx, dtype=np.int64)
+        pts = self._positions[idx]
+        tree = cKDTree(pts)
+        dist, nn = tree.query(pts, k=2)
+        order = np.argsort(dist[:, 1])          # closest pairs first
+        used = np.zeros(len(idx), dtype=bool)
+        pairs = []
+        for a in order:
+            b = nn[a, 1]
+            if used[a] or used[b]:
+                continue
+            used[a] = used[b] = True
+            pairs.append((idx[a], idx[b]))
+        return np.array(pairs, dtype=np.int64) if pairs else np.empty((0, 2), np.int64)
+
+    def _apply_domain_bounds(self):
+        """Wrap/clamp particle positions to the domain (as in ``step``)."""
+        self._positions[:, 0] = self._positions[:, 0] % self.L
+        self._positions[:, 1] = np.clip(self._positions[:, 1], 0.5, self.W - 0.5)
+        self._positions[:, 2] = np.clip(self._positions[:, 2], 0.1, self.H - 0.1)
 
     def set_observation(self, center: np.ndarray, radius: float):
         """
@@ -801,7 +1232,10 @@ class VortexParticleField:
         self.base_sigma = self.H / 5.0
         self.min_sigma = hydraulics.eta_kolmogorov * 3
         self._build_velocity_lut()
-        self._seed_particles()
+        self._seed_field()
+        self._ref_volume = self._reference_particle_volume()
+        self._volumes = np.full(len(self._positions), self._ref_volume,
+                                dtype=np.float64)
 
     def __repr__(self) -> str:
         return (

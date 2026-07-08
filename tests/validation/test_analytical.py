@@ -35,11 +35,15 @@ class TestLambOseen:
 
     def test_velocity_decays_with_time(self):
         """Velocity should decrease as vortex diffuses."""
+        # Use nu=1.0 so viscous diffusion is resolved at these radii/times;
+        # with the molecular default (1.1e-5) the exponential is fully
+        # saturated and the vortex has not measurably diffused.
         r = np.array([0.1, 0.5, 1.0])
         t1, t2 = 0.1, 1.0
+        nu = 1.0
 
-        v1 = lamb_oseen_vortex(r, t1)
-        v2 = lamb_oseen_vortex(r, t2)
+        v1 = lamb_oseen_vortex(r, t1, nu=nu)
+        v2 = lamb_oseen_vortex(r, t2, nu=nu)
 
         assert np.all(v2 < v1)
 
@@ -59,13 +63,17 @@ class TestLambOseen:
 
     def test_core_size_grows(self):
         """Core size should grow with sqrt(t)."""
-        # Core size ~ sqrt(4*nu*t), so half-max radius should scale with sqrt(t)
+        # Core size ~ sqrt(4*nu*t), so half-max radius should scale with sqrt(t).
+        # Use nu=1.0 (molecular nu leaves the core far below the grid) and a
+        # radial range wide enough to contain both half-max radii
+        # (~1.67 and ~3.33 for these times).
         t1, t2 = 1.0, 4.0  # t2 = 4*t1, so core should be 2x larger
+        nu = 1.0
 
-        r = np.linspace(0, 1, 100)
+        r = np.linspace(0, 6, 400)
 
-        omega1 = lamb_oseen_vorticity(r, t1)
-        omega2 = lamb_oseen_vorticity(r, t2)
+        omega1 = lamb_oseen_vorticity(r, t1, nu=nu)
+        omega2 = lamb_oseen_vorticity(r, t2, nu=nu)
 
         # Find half-max radii
         r_half1 = r[np.argmin(np.abs(omega1 - omega1.max() / 2))]

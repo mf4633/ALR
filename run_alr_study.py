@@ -114,7 +114,13 @@ def checks_convergence(verbose=False):
         f"counts={r.n_particles}",
     ))
 
-    # Check: circulation conservation (total |omega| before/after simulation)
+    # Check: total vortex strength conservation.
+    # The conserved quantity of the discretized field is the total strength
+    # sum(|omega_i| * Vol_i) (units of circulation), NOT sum(|omega_i|): the
+    # latter is not conservation-aware and would spuriously "grow" if particles
+    # were split during refinement (each child carries omega but a fraction of
+    # the volume).  Measuring strength keeps the check correct whether or not
+    # refinement adds/removes particles.
     import numpy as np
     from quantum_hydraulics.core.hydraulics import HydraulicsEngine
     from quantum_hydraulics.core.vortex_field import VortexParticleField
@@ -125,14 +131,19 @@ def checks_convergence(verbose=False):
     engine = _create_engine()
     vf = VortexParticleField(engine, length=CHANNEL_LENGTH, n_particles=2000)
     vf.set_observation(OBS_CENTER, 25.0)
-    circ_before = float(np.sum(np.sqrt(np.sum(vf._vorticities ** 2, axis=1))))
+
+    def _total_strength(field):
+        return float(np.sum(np.linalg.norm(field._vorticities, axis=1)
+                            * field._volumes))
+
+    circ_before = _total_strength(vf)
     _run_field(vf)
-    circ_after = float(np.sum(np.sqrt(np.sum(vf._vorticities ** 2, axis=1))))
+    circ_after = _total_strength(vf)
     circ_change = abs(circ_after - circ_before) / circ_before if circ_before > 0 else 0
     results.append(CheckResult(
-        "Circulation conserved (< 50% drift over simulation)",
+        "Vortex strength conserved (< 50% drift over simulation)",
         circ_change < 0.50,
-        f"before={circ_before:.1f}, after={circ_after:.1f}, drift={circ_change:.1%}",
+        f"before={circ_before:.3f}, after={circ_after:.3f}, drift={circ_change:.1%}",
     ))
 
     return results, r
