@@ -122,17 +122,34 @@ refinement can converge to.
 1. **Diagnostics (done).** `overlap_ratio()` and `observation_zone_mask()` on
    `VortexParticleField`, plus a regression test documenting the in-zone overlap
    violation.
-2. **Per-particle volumes.** Swap scalar `particle_volume` for `_volumes`;
-   induction uses per-particle strength. Verify no change vs. today when volumes
-   are uniform (bit-for-bit or within fp tolerance).
-3. **Conservative split/merge** behind `enable_refinement=False`. Unit tests:
-   zeroth/first-moment conservation; `overlap_ratio` in-zone drops toward 1.
-4. **Coherent seeding** option; convergence study across particle budgets.
-5. **Recalibrate** the 2D scour model (`swmm_node.py` kernel + `1.2x` floor +
-   logistic params) against the refined field, and unify the two induction
-   kernels.
-6. Flip refinement on by default only after 3-5 validate; update the paper's
+2. **Per-particle volumes (done).** Scalar `particle_volume` replaced by
+   `_volumes`; induction uses per-particle strength. Verified identical to the
+   old scalar path for uniform volumes (~1e-15).
+3. **Conservative split/merge (done, opt-in `enable_refinement=False`).**
+   Octahedral 1->7 split with volume subdivision; greedy pairwise merge for
+   over-dense particles; population cap `refine_n_max`. Measured: in-zone
+   `overlap_ratio` mean 3.22 -> 0.70 in one pass and holds ~1.0 over 20 steps
+   under the cap; total strength `sum(omega*Vol)` and total volume conserved to
+   ~1e-15 / ~1e-12. Unit tests cover conservation, overlap restoration, cap, and
+   multi-step stability.
+4. **Coherent seeding (todo).** Required for convergence; option to seed the
+   mean-shear vorticity plus prescribed coherent structures instead of random
+   phase. Then run the convergence study across particle budgets.
+5. **Recalibrate (todo).** The 2D scour model (`swmm_node.py` kernel + `1.2x`
+   floor + logistic params) against the refined field, and unify the two
+   induction kernels.
+6. Flip refinement on by default only after 4-5 validate; update the paper's
    claims to match the measured convergence.
+
+### Status note (Phase 3)
+
+Refinement now restores the overlap condition by adding degrees of freedom, so
+the "adaptive Lagrangian refinement" mechanism is real and conservative. It is
+**off by default** and does not change any reported result until enabled.
+Turning it on is deferred until Phase 4 (coherent seeding), because refining a
+random-phase field improves overlap but still has no converged limit to
+approach (see the `1/sqrt(N)` note above); a convergence study only becomes
+meaningful once the seed is coherent.
 
 ## 7. Validation criteria
 

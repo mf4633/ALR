@@ -377,3 +377,91 @@ class TestPerParticleVolume:
         # Induction must not raise on the appended state
         v = field.compute_velocity_induction()
         assert v.shape == (n0 + 1, 3)
+
+
+# =============================================================================
+# TestRefinement (Phase 3: conservative split/merge)
+# =============================================================================
+
+class TestRefinement:
+    """Adaptive Lagrangian refinement -- conservative split/merge."""
+
+    def _total_strength(self, field):
+        return (field._vorticities * field._volumes[:, None]).sum(axis=0)
+
+    def test_stencil_sums_to_zero(self):
+        s = VortexParticleField._octahedral_stencil()
+        assert s.shape == (7, 3)
+        assert np.allclose(s.sum(axis=0), 0.0)
+
+    def test_refine_noop_when_disabled(self, small_field):
+        n0 = len(small_field._positions)
+        summary = small_field.refine()
+        assert summary["split"] == 0 and summary["merged"] == 0
+        assert len(small_field._positions) == n0
+
+    def test_split_conserves_strength_and_volume(self, hydraulics):
+        field = VortexParticleField(hydraulics, length=100, n_particles=500)
+        field.set_observation([50, 15, 2.5], radius=10)
+        field._sigmas = field._get_adaptive_core_sizes_batch(field._positions)
+        s0 = self._total_strength(field).copy()
+        v0 = field._volumes.sum()
+        idx = np.where(field.observation_zone_mask())[0][:20]
+
+        added = field._split_particles(idx)
+
+        assert added == len(idx) * 6
+        s1 = self._total_strength(field)
+        assert np.max(np.abs(s1 - s0)) / max(np.max(np.abs(s0)), 1e-12) < 1e-10
+        assert abs(field._volumes.sum() - v0) < 1e-9
+        # arrays stay consistent
+        n = len(field._positions)
+        assert len(field._vorticities) == n == len(field._sigmas) == len(field._volumes) == len(field._ages)
+
+    def test_split_children_inherit_sigma(self, hydraulics):
+        field = VortexParticleField(hydraulics, length=100, n_particles=300)
+        field._sigmas = np.full(len(field._positions), 0.4)
+        field._split_particles(np.array([0, 1, 2]))
+        # every particle still has the inherited core size
+        assert np.allclose(field._sigmas, 0.4)
+
+    def test_merge_conserves_strength_and_volume(self, hydraulics):
+        field = VortexParticleField(hydraulics, length=100, n_particles=400)
+        s0 = self._total_strength(field).copy()
+        v0 = field._volumes.sum()
+        pairs = np.array([[0, 1], [2, 3], [4, 5]])
+        removed = field._merge_particles(pairs)
+        assert removed == -3
+        s1 = self._total_strength(field)
+        assert np.max(np.abs(s1 - s0)) / max(np.max(np.abs(s0)), 1e-12) < 1e-10
+        assert abs(field._volumes.sum() - v0) < 1e-9
+
+    def test_refine_restores_overlap(self, hydraulics):
+        field = VortexParticleField(hydraulics, length=100, n_particles=2000)
+        field.set_observation([50, 15, 2.5], radius=10)
+        field._sigmas = field._get_adaptive_core_sizes_batch(field._positions)
+        before = field.overlap_ratio(field.observation_zone_mask())["mean"]
+        field.enable_refinement = True
+        field.refine()
+        after = field.overlap_ratio(field.observation_zone_mask())["mean"]
+        assert before > 2.0            # under-resolved before
+        assert after < 1.5             # overlap restored
+
+    def test_population_cap_respected(self, hydraulics):
+        field = VortexParticleField(hydraulics, length=100, n_particles=1500)
+        field.set_observation([50, 15, 2.5], radius=12)
+        field.enable_refinement = True
+        field.refine_n_max = 2500
+        for _ in range(10):
+            field.step(dt=0.05)
+        assert len(field._positions) <= 2500
+
+    def test_step_with_refinement_no_nan(self, hydraulics):
+        field = VortexParticleField(hydraulics, length=100, n_particles=800)
+        field.set_observation([50, 15, 2.5], radius=10)
+        field.enable_refinement = True
+        field.refine_n_max = 2000
+        for _ in range(5):
+            field.step(dt=0.05)
+        assert not np.any(np.isnan(field._positions))
+        assert not np.any(np.isnan(field._vorticities))

@@ -399,6 +399,17 @@ class VortexParticleField:
         # Optional pier bodies for vortex shedding
         self.pier_bodies: Optional[list] = None
 
+        # Adaptive Lagrangian refinement (flaw #2). When enabled, particles in
+        # observation zones whose overlap ratio h/sigma exceeds ``refine_split_ratio``
+        # are split conservatively (adding degrees of freedom), and over-dense
+        # particles below ``refine_merge_ratio`` are merged, capped at
+        # ``refine_n_max``. OFF by default -- see docs/ALR_REFINEMENT_DESIGN.md.
+        self.enable_refinement = False
+        self.refine_split_ratio = 1.4
+        self.refine_merge_ratio = 0.4
+        self.refine_stencil_frac = 0.7
+        self.refine_n_max: Optional[int] = None
+
         # Structure-of-Arrays particle storage (OPTIMIZED)
         self.n_particles = n_particles
         self._positions: np.ndarray = np.zeros((0, 3), dtype=np.float64)
@@ -734,6 +745,10 @@ class VortexParticleField:
         # Update core sizes based on observation (vectorized)
         self._sigmas = self._get_adaptive_core_sizes_batch(self._positions)
 
+        # Adaptive Lagrangian refinement (opt-in; no-op when disabled)
+        if self.enable_refinement:
+            self.refine()
+
         # Pier vortex shedding (optional)
         if self.pier_bodies:
             V_approach = self.hydraulics.V_mean
@@ -845,6 +860,200 @@ class VortexParticleField:
             dist = np.linalg.norm(self._positions - center, axis=1)
             mask |= dist < (factor * radius)
         return mask
+
+    # ------------------------------------------------------------------
+    # Adaptive Lagrangian refinement (flaw #2) -- opt-in, default off
+    # ------------------------------------------------------------------
+
+    def _nearest_neighbor_spacing(self) -> np.ndarray:
+        """Distance from each particle to its nearest neighbour, shape (N,)."""
+        pos = self._positions
+        n = len(pos)
+        if n < 2:
+            return np.full(n, np.inf)
+        if cKDTree is not None:
+            tree = cKDTree(pos)
+            dist, _ = tree.query(pos, k=2)
+            return dist[:, 1]
+        h = np.empty(n)
+        for i in range(n):
+            d = np.linalg.norm(pos - pos[i], axis=1)
+            d[i] = np.inf
+            h[i] = d.min()
+        return h
+
+    @staticmethod
+    def _octahedral_stencil() -> np.ndarray:
+        """Unit octahedral split stencil (centre + 6 axis points), sum = 0."""
+        return np.array([
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0], [-1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0], [0.0, -1.0, 0.0],
+            [0.0, 0.0, 1.0], [0.0, 0.0, -1.0],
+        ])
+
+    def _split_particles(self, idx: np.ndarray) -> int:
+        """
+        Split the particles at ``idx`` into 7 children each (octahedral stencil).
+
+        Conservation (exact, independent of stencil radius, because the stencil
+        is centrally symmetric):
+          - total volume: children share the parent volume (Vol/7 each);
+          - zeroth strength moment: sum(omega*Vol) unchanged (omega inherited,
+            volume split);
+          - first strength moment: strength-weighted centroid = parent position.
+
+        Returns the net change in particle count.
+        """
+        idx = np.asarray(idx, dtype=np.int64)
+        if idx.size == 0:
+            return 0
+
+        M = 7
+        stencil = self._octahedral_stencil()             # (7, 3)
+        keep = np.ones(len(self._positions), dtype=bool)
+        keep[idx] = False
+
+        P = self._positions[idx]                          # (k, 3)
+        O = self._vorticities[idx]
+        S = self._sigmas[idx]
+        V = self._volumes[idx]
+        A = self._ages[idx]
+
+        radii = self.refine_stencil_frac * S              # (k,)
+        # children positions: P_i + radius_i * stencil_k
+        child_pos = (P[:, None, :]
+                     + radii[:, None, None] * stencil[None, :, :]).reshape(-1, 3)
+        child_omega = np.repeat(O, M, axis=0)             # vorticity inherited
+        child_sigma = np.repeat(S, M)                     # core size inherited
+        child_vol = np.repeat(V / M, M)                   # volume split
+        child_age = np.repeat(A, M)
+
+        self._positions = np.vstack([self._positions[keep], child_pos])
+        self._vorticities = np.vstack([self._vorticities[keep], child_omega])
+        self._sigmas = np.concatenate([self._sigmas[keep], child_sigma])
+        self._volumes = np.concatenate([self._volumes[keep], child_vol])
+        self._ages = np.concatenate([self._ages[keep], child_age])
+
+        return idx.size * (M - 1)
+
+    def _merge_particles(self, pairs: np.ndarray) -> int:
+        """
+        Merge disjoint particle pairs, conserving total strength and volume.
+
+        Each merged particle carries the summed volume and the summed vector
+        strength (omega*Vol), so the total zeroth moment sum(omega*Vol) and the
+        total volume are exactly preserved; it is placed at the
+        strength-magnitude-weighted centroid (first moment approximate).
+
+        ``pairs`` is an (m, 2) int array of disjoint indices. Returns the net
+        change in particle count (negative).
+        """
+        pairs = np.asarray(pairs, dtype=np.int64)
+        if pairs.size == 0:
+            return 0
+
+        i, j = pairs[:, 0], pairs[:, 1]
+        Vi, Vj = self._volumes[i], self._volumes[j]
+        Oi, Oj = self._vorticities[i], self._vorticities[j]
+        # Vector strengths alpha = omega * Vol
+        Ai = Oi * Vi[:, None]
+        Aj = Oj * Vj[:, None]
+        V_new = Vi + Vj
+        A_new = Ai + Aj
+        O_new = A_new / V_new[:, None]                    # conserves sum(omega*Vol)
+        # strength-magnitude-weighted centroid
+        wi = np.linalg.norm(Ai, axis=1)
+        wj = np.linalg.norm(Aj, axis=1)
+        wsum = np.maximum(wi + wj, 1e-30)
+        P_new = (self._positions[i] * wi[:, None]
+                 + self._positions[j] * wj[:, None]) / wsum[:, None]
+        S_new = (self._sigmas[i] * Vi + self._sigmas[j] * Vj) / V_new
+        Age_new = np.maximum(self._ages[i], self._ages[j])
+
+        drop = np.zeros(len(self._positions), dtype=bool)
+        drop[i] = True
+        drop[j] = True
+        self._positions = np.vstack([self._positions[~drop], P_new])
+        self._vorticities = np.vstack([self._vorticities[~drop], O_new])
+        self._sigmas = np.concatenate([self._sigmas[~drop], S_new])
+        self._volumes = np.concatenate([self._volumes[~drop], V_new])
+        self._ages = np.concatenate([self._ages[~drop], Age_new])
+
+        return -pairs.shape[0]
+
+    def refine(self) -> dict:
+        """
+        Run one adaptive-refinement pass (split under-resolved in-zone particles,
+        merge over-dense ones), respecting ``refine_n_max``.
+
+        No-op unless ``enable_refinement`` is True. Returns a summary dict with
+        the number split/merged and the resulting particle count.
+
+        Total vortex strength sum(omega*Vol) and total volume are conserved by
+        the split step exactly and by the merge step to the zeroth moment.
+        """
+        summary = {"split": 0, "merged": 0, "n": len(self._positions)}
+        if not self.enable_refinement or len(self._positions) < 2:
+            return summary
+
+        n_max = self.refine_n_max or (5 * self.n_particles)
+        h = self._nearest_neighbor_spacing()
+        ratio = h / np.maximum(self._sigmas, 1e-12)
+
+        # --- split: in-zone particles that violate overlap ---
+        in_zone = self.observation_zone_mask()
+        split_candidates = np.where(in_zone & (ratio > self.refine_split_ratio))[0]
+        if split_candidates.size > 0:
+            # respect the population cap (each split adds 6 particles)
+            budget = max(0, (n_max - len(self._positions)) // 6)
+            if split_candidates.size > budget:
+                # split the worst-overlap particles first
+                order = np.argsort(ratio[split_candidates])[::-1]
+                split_candidates = split_candidates[order[:budget]]
+            if split_candidates.size > 0:
+                added = self._split_particles(split_candidates)
+                summary["split"] = split_candidates.size
+                # keep particles inside the domain after placing children
+                self._apply_domain_bounds()
+
+        # --- merge: over-dense particles (outside observation zones) ---
+        h = self._nearest_neighbor_spacing()
+        ratio = h / np.maximum(self._sigmas, 1e-12)
+        dense = np.where((~self.observation_zone_mask())
+                         & (ratio < self.refine_merge_ratio))[0]
+        if dense.size >= 2 and cKDTree is not None:
+            pairs = self._disjoint_nearest_pairs(dense)
+            if pairs.size > 0:
+                self._merge_particles(pairs)
+                summary["merged"] = pairs.shape[0]
+
+        summary["n"] = len(self._positions)
+        return summary
+
+    def _disjoint_nearest_pairs(self, idx: np.ndarray) -> np.ndarray:
+        """Greedily pair each candidate with its nearest candidate neighbour,
+        using each particle at most once. Returns an (m, 2) index array."""
+        idx = np.asarray(idx, dtype=np.int64)
+        pts = self._positions[idx]
+        tree = cKDTree(pts)
+        dist, nn = tree.query(pts, k=2)
+        order = np.argsort(dist[:, 1])          # closest pairs first
+        used = np.zeros(len(idx), dtype=bool)
+        pairs = []
+        for a in order:
+            b = nn[a, 1]
+            if used[a] or used[b]:
+                continue
+            used[a] = used[b] = True
+            pairs.append((idx[a], idx[b]))
+        return np.array(pairs, dtype=np.int64) if pairs else np.empty((0, 2), np.int64)
+
+    def _apply_domain_bounds(self):
+        """Wrap/clamp particle positions to the domain (as in ``step``)."""
+        self._positions[:, 0] = self._positions[:, 0] % self.L
+        self._positions[:, 1] = np.clip(self._positions[:, 1], 0.5, self.W - 0.5)
+        self._positions[:, 2] = np.clip(self._positions[:, 2], 0.1, self.H - 0.1)
 
     def set_observation(self, center: np.ndarray, radius: float):
         """
