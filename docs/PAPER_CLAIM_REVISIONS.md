@@ -12,6 +12,8 @@ claim to what the data supports. Both are offered below.
 
 ## 1. "12x particle reduction at 0.2% vorticity error"
 
+> **RESOLVED (implemented).** The experiment was rebuilt (valid: in-zone induced-velocity error vs a converged deterministic reference at fixed core size). Measured placement reduction is **~4.7x**, not 12x, with a ~6.7x out-of-zone cost; both curves scale 1/sqrt(N). The generators now state this. See docs/DESIGN_costbenefit_fix.md.
+
 **Problem.** The cost-benefit experiment compares ALR-500 against a "uniform
 high-resolution 6,000-particle baseline," but the baseline's core size is reset
 to the coarse `base_sigma` every step (the forced `min_sigma` is overwritten), so

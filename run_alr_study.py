@@ -157,45 +157,47 @@ def checks_cost_benefit(verbose=False):
         print("  " + "-" * 50)
 
     r = run_cost_benefit(verbose=verbose)
+    import numpy as _np
+    counts = _np.array(r.particle_counts, dtype=float)
 
-    # Check: baseline values are nonzero
+    # Check: in-zone induced-velocity error scales ~1/sqrt(N) (err*sqrt(N) ~ const)
+    Ku = _np.array(r.errors_uniform) * _np.sqrt(counts)
+    Kc = _np.array(r.errors_concentrated) * _np.sqrt(counts)
+    cv = float(_np.std(Ku) / max(_np.mean(Ku), 1e-12))
     results.append(CheckResult(
-        "Baseline metrics nonzero",
-        r.baseline_vorticity > 0 and r.baseline_enstrophy > 0,
-        f"vort={r.baseline_vorticity:.4f}, enstrophy={r.baseline_enstrophy:.4f}",
+        "In-zone error scales ~1/sqrt(N) (uniform K CV < 0.3)",
+        cv < 0.3,
+        f"K_uniform={[round(k,1) for k in Ku]}, CV={cv:.2f}",
     ))
 
-    # Check: errors generally decrease with more particles
-    if len(r.errors_vorticity) >= 3:
-        # Compare first third vs last third
-        n = len(r.errors_vorticity)
-        early_avg = sum(r.errors_vorticity[:n // 3 + 1]) / (n // 3 + 1)
-        late_avg = sum(r.errors_vorticity[-(n // 3 + 1):]) / (n // 3 + 1)
-        results.append(CheckResult(
-            "Error decreases with more particles",
-            late_avg <= early_avg * 1.5,  # allow some noise
-            f"early_avg={early_avg:.3f}, late_avg={late_avg:.3f}",
-        ))
-    else:
-        results.append(CheckResult(
-            "Error decreases with more particles", False, "insufficient data",
-        ))
+    # Check: concentrated placement beats uniform in-zone at every matched N
+    beats = all(c <= u * 1.05 for c, u in zip(r.errors_concentrated, r.errors_uniform))
+    results.append(CheckResult(
+        "Concentrated placement <= uniform in-zone at matched N",
+        beats,
+        f"concentrated={[round(x,3) for x in r.errors_concentrated]}, "
+        f"uniform={[round(x,3) for x in r.errors_uniform]}",
+    ))
 
-    # Check: highest particle count achieves reasonable accuracy
-    if r.errors_vorticity:
-        best_err = r.errors_vorticity[-1]
-        results.append(CheckResult(
-            "Best ALR vorticity error < 50%",
-            best_err < 0.50,
-            f"error={best_err:.3f} at N={r.particle_counts[-1]}",
-        ))
+    # Check: measured reduction factor is a real, bounded benefit (~4x expected)
+    results.append(CheckResult(
+        "Placement reduction factor >= 3x (measured, ~4x)",
+        r.reduction_factor >= 3.0,
+        f"reduction={r.reduction_factor:.2f}x (in-zone benefit)",
+    ))
+
+    # Check: the trade-off is real -- concentration is WORSE out of zone
+    results.append(CheckResult(
+        "Out-of-zone error is worse for concentrated (trade-off is real)",
+        r.out_of_zone_penalty > 1.2,
+        f"out-of-zone penalty={r.out_of_zone_penalty:.2f}x worse",
+    ))
 
     # Check: wall times increase with particle count (sanity)
     if len(r.wall_times) >= 2:
-        time_trend = r.wall_times[-1] > r.wall_times[0]
         results.append(CheckResult(
             "Compute time increases with N (sanity)",
-            time_trend,
+            r.wall_times[-1] > r.wall_times[0],
             f"time(N={r.particle_counts[0]})={r.wall_times[0]:.2f}s, "
             f"time(N={r.particle_counts[-1]})={r.wall_times[-1]:.2f}s",
         ))
@@ -436,16 +438,16 @@ def generate_figures(exp_results, output_dir="ALR_figures"):
         fig.patch.set_facecolor(theme.background)
 
         ax1.set_facecolor(theme.background)
-        ax1.plot(r.particle_counts, r.errors_vorticity, "o-",
-                 color=theme.accent_primary, linewidth=2, markersize=6,
-                 label="Vorticity error")
-        ax1.plot(r.particle_counts, r.errors_enstrophy, "s--",
-                 color=theme.accent_secondary, linewidth=2, markersize=6,
-                 label="Enstrophy error")
-        ax1.axhline(y=0.20, color="gray", linestyle=":", label="20% target")
-        ax1.set_xlabel("Particle Count (ALR)", color=theme.foreground)
-        ax1.set_ylabel("Relative Error vs Baseline", color=theme.foreground)
-        ax1.set_title("Accuracy vs Particle Count",
+        ax1.loglog(r.particle_counts, r.errors_uniform, "o-",
+                   color=theme.accent_secondary, linewidth=2, markersize=6,
+                   label="Uniform placement")
+        ax1.loglog(r.particle_counts, r.errors_concentrated, "s-",
+                   color=theme.accent_primary, linewidth=2, markersize=6,
+                   label=f"Observation-concentrated ({r.reduction_factor:.1f}x fewer)")
+        ax1.set_xlabel("Particle Count", color=theme.foreground)
+        ax1.set_ylabel("In-zone induced-velocity RMS rel. error",
+                       color=theme.foreground)
+        ax1.set_title("In-zone accuracy vs particle count",
                        color=theme.foreground, fontsize=10, weight="bold")
         ax1.legend(fontsize=8)
         ax1.tick_params(colors=theme.foreground)
@@ -461,7 +463,8 @@ def generate_figures(exp_results, output_dir="ALR_figures"):
         ax2.tick_params(colors=theme.foreground)
         ax2.grid(True, color=theme.grid_color, alpha=theme.grid_alpha)
 
-        fig.suptitle("Experiment 2: Cost-Benefit Analysis (vs 6000-particle uniform)",
+        fig.suptitle("Experiment 2: Cost-Benefit (in-zone induced velocity vs "
+                     "converged reference)",
                       color=theme.foreground, fontsize=11, weight="bold")
         fig.tight_layout()
         path = os.path.join(output_dir, "fig3_cost_benefit.png")

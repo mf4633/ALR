@@ -296,8 +296,10 @@ body(
     f"The method is validated against six established methods\u2014HEC-18 CSU pier scour "
     f"(r = 0.605), Laursen live-bed contraction scour (r = 0.998), Melville (1997) "
     f"dimensionless design curve, Manning\u2019s equation, Shields criterion, and Neill "
-    f"critical velocity\u2014and reduces a 6,000-particle simulation to 500 particles "
-    f"({cost.errors_vorticity[1]:.2%} vorticity error) with total vortex strength conserved to within 0.1%."
+    f"critical velocity. Observation-concentrated particle placement reaches a "
+    f"given in-zone induced-velocity accuracy with about {cost.reduction_factor:.1f}x "
+    f"fewer particles than uniform placement, with total vortex strength conserved "
+    f"to within 0.1%."
 )
 body(
     "The method is validated through five controlled ALR experiments plus cross-checks "
@@ -599,37 +601,40 @@ table(
     "Table 4. Convergence of ALR metrics with observation radius.",
 )
 
-doc.add_heading("4.2 Computational Performance", level=2)
+doc.add_heading("4.2 Cost-Benefit: Accuracy vs Particle Placement", level=2)
 body(
-    f"The primary advantage of ALR is computational speed. A uniform high-resolution "
-    f"simulation requires 6,000 particles and {baseline_wall:.2f} s of wall time. "
-    f"ALR achieves equivalent accuracy at the observation zone with far fewer particles "
-    f"by allocating resolution only where needed (Table 5).",
+    f"We quantify the benefit of observation-dependent resolution against a "
+    f"converged, deterministic reference: the induced-velocity field of the "
+    f"coherent mean-shear seed, evaluated by grid quadrature at fixed core size. "
+    f"The particle field is a Monte-Carlo quadrature of this integral, so its "
+    f"in-zone RMS relative error scales as 1/sqrt(N). Concentrating particle "
+    f"placement on the observation zone (importance sampling) reaches a given "
+    f"in-zone accuracy with about {cost.reduction_factor:.1f}x fewer particles "
+    f"than uniform placement, at the cost of {cost.out_of_zone_penalty:.1f}x "
+    f"larger error outside the zone (Table 5).",
     indent=True,
 )
 
 table(
-    ["Particles", "Wall Time (s)", "Speedup", "Vorticity Error"],
+    ["Particles", "In-zone error (uniform)", "In-zone error (concentrated)", "Wall Time (s)"],
     [
-        ["6,000 (uniform)", f"{baseline_wall:.3f}", "1\u00d7 (baseline)", "\u2014"],
-    ] + [
-        [f"{cost.particle_counts[i]:,d} (ALR)",
-         f"{cost.wall_times[i]:.3f}",
-         f"{baseline_wall / cost.wall_times[i]:.0f}\u00d7",
-         f"{cost.errors_vorticity[i]:.2%}"]
+        [f"{cost.particle_counts[i]:,d}",
+         f"{cost.errors_uniform[i]:.1%}",
+         f"{cost.errors_concentrated[i]:.1%}",
+         f"{cost.wall_times[i]:.2f}"]
         for i in range(len(cost.particle_counts))
     ],
-    "Table 5. Computational performance: ALR vs uniform resolution.",
+    "Table 5. In-zone induced-velocity accuracy vs particle placement.",
 )
 
 body(
-    f"At the optimal operating point of 500 ALR particles, the method achieves a "
-    f"{speedup:.0f}\u00d7 wall-time speedup with only {cost.errors_vorticity[1]:.2%} "
-    f"vorticity error relative to the 6,000-particle baseline. "
-    f"The speedup exceeds the 12\u00d7 particle reduction ratio because Biot-Savart "
-    f"velocity evaluation scales as O(N\u00b2) for uniform distributions; ALR\u2019s "
-    f"6\u03c3 cutoff radius reduces this to O(N\u00d7K) where K is the average neighbor "
-    f"count, and larger core sizes in coarse zones further reduce K.",
+    f"The reduction is a placement effect (more degrees of freedom where they are "
+    f"observed), not a consequence of shrinking the core size, and it is the same "
+    f"factor at every accuracy level because both curves scale as 1/sqrt(N). "
+    f"Pointwise in-zone induced velocity is expensive to resolve -- the benefit is "
+    f"the ~{cost.reduction_factor:.1f}x placement saving and the accompanying "
+    f"out-of-zone trade-off, not a claim of near-exact reconstruction at low "
+    f"particle counts.",
     indent=True,
 )
 
@@ -750,13 +755,16 @@ conclusions = [
     f"physically consistent trends (Laursen contraction r = 0.998, HEC-18 pier scour "
     f"r = 0.605). QH provides a complementary turbulence amplification factor that "
     f"augments\u2014rather than replaces\u2014established empirical methods.",
-    f"ALR reduces a 6,000-particle uniform simulation to 500 particles with "
-    f"{cost.errors_vorticity[1]:.2%} vorticity error and total vortex strength conserved "
-    f"to within 0.1% via the symmetrized Biot-Savart kernel, achieving a {speedup:.0f}\u00d7 "
-    f"wall-time reduction.",
-    f"Quasi-unsteady sediment transport with Hirano armoring produces 10.6 ft of "
-    f"clear-water scour with 9\u00d7 surface coarsening\u2014physically consistent behavior "
-    f"for a dam-release scenario on sand-gravel bed (Williams & Wolman 1984).",
+    f"Observation-concentrated particle placement reaches a given in-zone "
+    f"induced-velocity accuracy with about {cost.reduction_factor:.1f}x fewer "
+    f"particles than uniform placement (measured against a converged reference at "
+    f"fixed core size), with total vortex strength conserved to within 0.1%; the "
+    f"benefit is a placement effect and carries a corresponding out-of-zone cost.",
+    f"Quasi-unsteady sediment transport with a mass-conserving Hirano active layer "
+    f"produces a coarse-armor lag under clear-water scour (surface d50 coarsening "
+    f"~6x, fines depleted, transport self-limiting), erodes through without a "
+    f"false armor when shear exceeds all fraction thresholds, and conserves "
+    f"sediment mass to machine precision.",
     f"The method integrates with PCSWMM as a post-processor requiring no additional "
     f"meshing or CFD software, filling the gap between Manning\u2019s n + HEC-18 correction "
     f"factors and full 3D CFD for routine scour screening.",

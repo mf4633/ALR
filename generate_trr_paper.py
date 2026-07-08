@@ -287,9 +287,10 @@ body(
     "engine uses adaptive vortex particle methods to compute turbulence-driven shear "
     "amplification at locations of interest, operating as a post-processor to standard "
     "hydraulic models. By concentrating computational resolution only where the engineer "
-    "requests it, the method provides physics-based results at screening-level cost\u2014"
-    "a 12\u00d7 particle reduction relative to uniform high-resolution simulation with "
-    f"only {cost.errors_vorticity[1]:.2%} error at the observation zone. "
+    "requests it, the method provides physics-based results at screening-level cost: "
+    f"observation-concentrated placement reaches a given in-zone induced-velocity "
+    f"accuracy with about {cost.reduction_factor:.1f}x fewer particles than uniform "
+    f"placement (with a corresponding out-of-zone cost). "
     "The tool augments HEC-18, providing an amplification factor that can be applied "
     "directly to empirical scour estimates.",
     indent=True,
@@ -652,9 +653,10 @@ conclusions = [
     "CSU pier scour (r = 0.605), Laursen contraction scour (r = 0.998), and the Melville "
     "design curve demonstrates physically consistent trends across all tested configurations.",
 
-    "Adaptive resolution reduces the particle count 12\u00d7 (6,000 to 500) with "
-    f"{cost.errors_vorticity[1]:.2%} vorticity error, making physics-based turbulence "
-    "analysis feasible as a routine screening step rather than a specialized CFD engagement.",
+    f"Observation-concentrated placement reaches a given in-zone induced-velocity "
+    f"accuracy with about {cost.reduction_factor:.1f}x fewer particles than uniform "
+    f"placement, making physics-based turbulence analysis feasible as a routine "
+    f"screening step rather than a specialized CFD engagement.",
 
     "The quasi-unsteady sediment transport module predicts armoring-limited degradation "
     "below dams (10.6 ft scour, 9\u00d7 coarsening), providing DOT engineers with "

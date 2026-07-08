@@ -56,14 +56,18 @@ class ConvergenceResult:
 
 @dataclass
 class CostBenefitResult:
+    # Valid accuracy-vs-cost experiment: in-zone induced-velocity RMS relative
+    # error against a converged, deterministic reference (fixed core size), for
+    # uniform vs observation-concentrated particle PLACEMENT. See
+    # docs/DESIGN_costbenefit_fix.md.
     particle_counts: List[int]
-    errors_sigma: List[float]       # relative to baseline
-    errors_vorticity: List[float]
-    errors_enstrophy: List[float]
+    errors_uniform: List[float]           # in-zone RMS rel err, uniform placement
+    errors_concentrated: List[float]      # in-zone RMS rel err, concentrated
+    errors_out_uniform: List[float]       # out-of-zone control, uniform
+    errors_out_concentrated: List[float]  # out-of-zone, concentrated (the price)
     wall_times: List[float]
-    baseline_sigma: float
-    baseline_vorticity: float
-    baseline_enstrophy: float
+    reduction_factor: float               # (K_uniform/K_concentrated)^2, in-zone
+    out_of_zone_penalty: float            # (K_conc_out/K_unif_out)^2
 
 @dataclass
 class SigmaFieldResult:
@@ -182,72 +186,165 @@ def run_convergence(radii=None, n_particles=2000, verbose=False) -> ConvergenceR
 
 # ── Experiment 2: Cost-Benefit Analysis ────────────────────────────────────
 
-def run_cost_benefit(particle_counts=None, baseline_particles=6000,
-                     verbose=False) -> CostBenefitResult:
-    """
-    Compare ALR at various particle counts against a uniform high-res baseline.
+# ── Valid cost-benefit: induced-velocity accuracy vs particle placement ────
+#
+# The coherent seed defines a DETERMINISTIC vorticity field omega=(0,du/dz,0) on
+# the interior support box; its induced velocity at a probe is a fixed integral.
+# Holding the core size fixed (overlap-maintaining), the particle field is a
+# Monte-Carlo quadrature that converges to that integral as ~K/sqrt(N). Placing
+# more particles in the observation zone (importance sampling) lowers K in-zone
+# at the cost of raising it out-of-zone. This is the honest, measurable ALR
+# trade-off (the old experiment compared a trivial box-mean of the seed against a
+# silently-coarse baseline -- see docs/DESIGN_costbenefit_fix.md).
 
-    Baseline: observation_active=False, all sigmas forced to min_sigma.
-    ALR runs: observation at pier wake, varying particle count.
+_CB_SIGMA_REF = DEPTH / 5.0                    # fixed physical core size (=base_sigma)
+_CB_S2 = 2.0 * _CB_SIGMA_REF ** 2              # symmetrized smoothing, both cores = ref
+_CB_FLO, _CB_FHI = 0.1, 0.9                    # interior support (matches _seed_coherent)
+_CB_PROBES = np.array([                        # probes INSIDE the observation zone
+    [OBS_CENTER[0], OBS_CENTER[1], 1.0], [OBS_CENTER[0], OBS_CENTER[1], 2.0],
+    [OBS_CENTER[0], OBS_CENTER[1], 3.0], [OBS_CENTER[0] - 5, OBS_CENTER[1], 2.0],
+    [OBS_CENTER[0] + 5, OBS_CENTER[1], 2.0], [OBS_CENTER[0], OBS_CENTER[1] - 5, 2.0],
+    [OBS_CENTER[0], OBS_CENTER[1] + 5, 2.0],
+])
+_CB_PROBES_OUT = np.array([                    # control probes far outside the zone
+    [30.0, OBS_CENTER[1], 2.0], [30.0, OBS_CENTER[1] - 5, 2.0], [30.0, OBS_CENTER[1], 3.0],
+])
+
+
+def _cb_support(engine):
+    L, W, H = CHANNEL_LENGTH, engine.width, engine.depth
+    return (_CB_FLO * L, _CB_FHI * L, _CB_FLO * W, _CB_FHI * W, _CB_FLO * H, _CB_FHI * H)
+
+
+def _cb_omega_y(engine, z):
+    dz = 0.01 * engine.depth
+    up = engine.velocity_profile_vectorized(z + dz)
+    dn = engine.velocity_profile_vectorized(np.maximum(z - dz, 1e-6))
+    return (up - dn) / (2.0 * dz)
+
+
+def _cb_induced(probes, pos, om, vol, s2):
+    out = np.zeros((len(probes), 3))
+    strength = om * vol[:, None]
+    for p in range(len(probes)):
+        r = pos - probes[p]
+        r2 = np.einsum("ij,ij->i", r, r)
+        K = 1.0 / (4.0 * np.pi * ((r2 + s2) ** 1.5 + 1e-12))
+        out[p] = (K[:, None] * np.cross(strength, r)).sum(axis=0)
+    return out
+
+
+def _cb_reference(engine, probes, ncells=(260, 110, 38)):
+    """Deterministic grid quadrature of the induced velocity (the ground truth)."""
+    xlo, xhi, ylo, yhi, zlo, zhi = _cb_support(engine)
+    v_dom = CHANNEL_LENGTH * engine.width * engine.depth
+    nx, ny, nz = ncells
+    xs = np.linspace(xlo, xhi, nx, endpoint=False) + 0.5 * (xhi - xlo) / nx
+    ys = np.linspace(ylo, yhi, ny, endpoint=False) + 0.5 * (yhi - ylo) / ny
+    zs = np.linspace(zlo, zhi, nz, endpoint=False) + 0.5 * (zhi - zlo) / nz
+    vol_cell = v_dom / (nx * ny * nz)
+    wy = _cb_omega_y(engine, zs)
+    XX, YY = np.meshgrid(xs, ys, indexing="ij")
+    xy = np.column_stack([XX.ravel(), YY.ravel()])
+    out = np.zeros((len(probes), 3))
+    for k in range(nz):
+        z, w = zs[k], wy[k]
+        for p in range(len(probes)):
+            rx = xy[:, 0] - probes[p, 0]
+            ry = xy[:, 1] - probes[p, 1]
+            rz = z - probes[p, 2]
+            K = 1.0 / (4.0 * np.pi * ((rx * rx + ry * ry + rz * rz + _CB_S2) ** 1.5 + 1e-12))
+            sx = w * vol_cell
+            out[p, 0] += (K * sx * rz).sum()
+            out[p, 2] += (K * sx * (-rx)).sum()
+    return out
+
+
+def _cb_uniform(engine, N, seed):
+    xlo, xhi, ylo, yhi, zlo, zhi = _cb_support(engine)
+    v_dom = CHANNEL_LENGTH * engine.width * engine.depth
+    rng = np.random.default_rng(seed)
+    pos = np.column_stack([rng.uniform(xlo, xhi, N), rng.uniform(ylo, yhi, N),
+                           rng.uniform(zlo, zhi, N)])
+    om = np.zeros((N, 3)); om[:, 1] = _cb_omega_y(engine, pos[:, 2])
+    return pos, om, np.full(N, v_dom / N)
+
+
+def _cb_concentrated(engine, N, seed, beta=0.85, hx=15.0, hy=10.0):
+    """Importance-sampled placement: a fraction beta of particles in a box around
+    the observation center, with unbiased per-particle volumes Vol=1/(N p(x))."""
+    xlo, xhi, ylo, yhi, zlo, zhi = _cb_support(engine)
+    v_dom = CHANNEL_LENGTH * engine.width * engine.depth
+    v_supp = (xhi - xlo) * (yhi - ylo) * (zhi - zlo)
+    rng = np.random.default_rng(seed)
+    bxlo, bxhi = max(xlo, OBS_CENTER[0] - hx), min(xhi, OBS_CENTER[0] + hx)
+    bylo, byhi = max(ylo, OBS_CENTER[1] - hy), min(yhi, OBS_CENTER[1] + hy)
+    v_box = (bxhi - bxlo) * (byhi - bylo) * (zhi - zlo)
+    inb = rng.random(N) < beta
+    nb = int(inb.sum())
+    pos = np.empty((N, 3))
+    pos[inb, 0] = rng.uniform(bxlo, bxhi, nb); pos[inb, 1] = rng.uniform(bylo, byhi, nb)
+    pos[~inb, 0] = rng.uniform(xlo, xhi, N - nb); pos[~inb, 1] = rng.uniform(ylo, yhi, N - nb)
+    pos[:, 2] = rng.uniform(zlo, zhi, N)
+    inbox = ((pos[:, 0] >= bxlo) & (pos[:, 0] <= bxhi) &
+             (pos[:, 1] >= bylo) & (pos[:, 1] <= byhi))
+    pdf = (1 - beta) / v_supp + np.where(inbox, beta / v_box, 0.0)
+    vol = (v_dom / v_supp) / (N * pdf)
+    om = np.zeros((N, 3)); om[:, 1] = _cb_omega_y(engine, pos[:, 2])
+    return pos, om, vol
+
+
+def _cb_rms_rel(vest, ref):
+    return np.sqrt(np.mean(((vest - ref) ** 2).sum(1)) / np.mean((ref ** 2).sum(1)))
+
+
+def run_cost_benefit(particle_counts=None, seeds=12, verbose=False) -> CostBenefitResult:
+    """
+    Valid accuracy-vs-cost experiment for the coherent-seeded induced-velocity
+    field: in-zone RMS relative error vs a converged deterministic reference,
+    comparing uniform vs observation-concentrated particle placement (fixed core
+    size). Reports the measured reduction factor (concentration vs uniform).
     """
     if particle_counts is None:
-        particle_counts = [200, 500, 1000, 2000, 4000]
+        particle_counts = [500, 1000, 2000, 4000, 8000, 16000]
 
     engine = _create_engine()
-
-    # ── Baseline: uniform high-res ────────────────────────────────────
+    ref = _cb_reference(engine, _CB_PROBES)
+    ref_out = _cb_reference(engine, _CB_PROBES_OUT)
     if verbose:
-        print("    Running baseline (uniform high-res)...")
-    np.random.seed(42)
-    vf_base = VortexParticleField(engine, length=CHANNEL_LENGTH,
-                                   n_particles=baseline_particles)
-    vf_base.toggle_observation(False)
-    # Force all sigmas to minimum (highest resolution everywhere)
-    vf_base._sigmas[:] = vf_base.min_sigma
-    _run_field(vf_base)
-    base_m = _measure_box(vf_base, *BOX_X, *BOX_Y)
+        print("    Built deterministic induced-velocity reference "
+              f"(|v| in-zone ~{np.linalg.norm(ref, axis=1).mean():.3f})")
 
-    result = CostBenefitResult(
-        particle_counts=particle_counts,
-        errors_sigma=[], errors_vorticity=[], errors_enstrophy=[],
-        wall_times=[],
-        baseline_sigma=base_m["mean_sigma"],
-        baseline_vorticity=base_m["mean_vorticity"],
-        baseline_enstrophy=base_m["mean_enstrophy"],
-    )
-
-    if verbose:
-        print(f"    Baseline: sigma={base_m['mean_sigma']:.4f}  "
-              f"vort={base_m['mean_vorticity']:.4f}  "
-              f"enstrophy={base_m['mean_enstrophy']:.4f}")
-
-    # ── ALR runs ──────────────────────────────────────────────────────
-    for np_count in particle_counts:
-        np.random.seed(42)
+    eu, ec, euo, eco, wall = [], [], [], [], []
+    for N in particle_counts:
         t0 = time.perf_counter()
-
-        vf = VortexParticleField(engine, length=CHANNEL_LENGTH, n_particles=np_count)
-        vf.set_observation(OBS_CENTER, 25.0)
-        _run_field(vf)
-
-        wall = time.perf_counter() - t0
-        m = _measure_box(vf, *BOX_X, *BOX_Y)
-
-        # Relative errors (avoid div/0)
-        def _rel_err(val, ref):
-            return abs(val - ref) / max(abs(ref), 1e-12)
-
-        result.errors_sigma.append(_rel_err(m["mean_sigma"], base_m["mean_sigma"]))
-        result.errors_vorticity.append(_rel_err(m["mean_vorticity"], base_m["mean_vorticity"]))
-        result.errors_enstrophy.append(_rel_err(m["mean_enstrophy"], base_m["mean_enstrophy"]))
-        result.wall_times.append(wall)
-
+        du = [_cb_rms_rel(_cb_induced(_CB_PROBES, *_cb_uniform(engine, N, 20000 + s), _CB_S2), ref)
+              for s in range(seeds)]
+        dc = [_cb_rms_rel(_cb_induced(_CB_PROBES, *_cb_concentrated(engine, N, 20000 + s), _CB_S2), ref)
+              for s in range(seeds)]
+        duo = [_cb_rms_rel(_cb_induced(_CB_PROBES_OUT, *_cb_uniform(engine, N, 20000 + s), _CB_S2), ref_out)
+               for s in range(seeds)]
+        dco = [_cb_rms_rel(_cb_induced(_CB_PROBES_OUT, *_cb_concentrated(engine, N, 20000 + s), _CB_S2), ref_out)
+               for s in range(seeds)]
+        rms = lambda a: float(np.sqrt(np.mean(np.array(a) ** 2)))
+        eu.append(rms(du)); ec.append(rms(dc)); euo.append(rms(duo)); eco.append(rms(dco))
+        wall.append(time.perf_counter() - t0)
         if verbose:
-            print(f"    N={np_count:5d}  err_sigma={result.errors_sigma[-1]:.3f}  "
-                  f"err_vort={result.errors_vorticity[-1]:.3f}  "
-                  f"time={wall:.2f}s")
+            print(f"    N={N:6d}  in-zone uniform={eu[-1]:.3f} concentrated={ec[-1]:.3f}  "
+                  f"out uniform={euo[-1]:.3f} concentrated={eco[-1]:.3f}")
 
-    return result
+    counts = np.array(particle_counts, dtype=float)
+    K = lambda errs: float(np.median(np.array(errs) * np.sqrt(counts)))
+    reduction = (K(eu) / max(K(ec), 1e-12)) ** 2                 # in-zone benefit
+    penalty = (K(eco) / max(K(euo), 1e-12)) ** 2                 # out-of-zone cost
+
+    return CostBenefitResult(
+        particle_counts=list(particle_counts),
+        errors_uniform=eu, errors_concentrated=ec,
+        errors_out_uniform=euo, errors_out_concentrated=eco,
+        wall_times=wall, reduction_factor=reduction,
+        out_of_zone_penalty=penalty,
+    )
 
 
 # ── Experiment 3: Sigma Field Visualization ────────────────────────────────

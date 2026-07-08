@@ -1,5 +1,7 @@
 # Verified Design Spec: costbenefit fix
 
+> **STATUS: IMPLEMENTED.** `run_cost_benefit` rewritten to the valid experiment; `run_alr_study.py` cost-benefit checks and all paper generators updated to the honest ~4.7x placement result. 25/25 ALR checks pass.
+
 > Produced by a design+prototype workflow (agents derived, built runnable /tmp prototypes, and measured real results). The adversarial/synth stages were cut short by a session limit, but each design self-verified with runnable evidence. Numbers below are measured, not asserted.
 
 I have all the evidence I need. Here is the complete deliverable.
