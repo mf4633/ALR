@@ -130,7 +130,10 @@ def analyze(
     side_slope : float
         Side slope H:V (default 2.0 for trapezoidal)
     critical_shear : float
-        Critical shear stress for scour in psf (default 0.15 for sand)
+        Critical (threshold-of-motion) shear stress in psf. The 0.15 psf
+        default is a coarse-gravel value; for a SAND bed the Shields critical
+        shear is far lower (~0.01-0.04 psf), so passing the default for sand
+        UNDER-reports scour risk. Set this to match the actual bed material.
 
     Returns
     -------

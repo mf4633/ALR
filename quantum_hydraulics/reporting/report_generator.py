@@ -405,11 +405,15 @@ class ReportBuilder:
             )
             self.add_subsection("Scour Risk Assessment")
             self.add_paragraph(
-                "Scour risk is evaluated using a non-saturating logistic function of the "
-                "excess shear ratio: <b>Risk = 1 / (1 + exp(-2.5(tau/tau_c - 1)))</b>, where "
-                "<i>tau</i> is the computed bed shear stress and <i>tau_c</i> is the critical "
-                "shear stress for the bed material. Sediment transport capacity is estimated "
-                "using the <b>Meyer-Peter Muller</b> formula, and the Shields parameter is computed "
+                "The scour risk index in the design-results table is the excess-shear "
+                "ratio of computed bed shear stress to the critical shear stress for the "
+                "bed material, capped at unity: <b>Risk = min(1, tau/tau_c)</b>, where "
+                "<i>tau</i> is the computed bed shear stress and <i>tau_c</i> is the "
+                "critical shear stress; a value of 1.0 indicates the bed shear meets or "
+                "exceeds the threshold of motion. Where a vortex-particle analysis is "
+                "included, its risk index instead uses a bounded logistic of the excess "
+                "shear ratio. Sediment transport capacity is estimated using the "
+                "<b>Meyer-Peter Muller</b> formula, and the Shields parameter is computed "
                 "as theta = tau / ((rho_s - rho) g d50)."
             )
 
@@ -804,7 +808,10 @@ def generate_scour_report(
     rb.add_section("Conclusions and Recommendations")
     if design_results:
         risk = design_results.scour_risk_index
-        if risk > 0.8:
+        # Thresholds are kept consistent with the Scour Assessment cell
+        # (analysis.py scour_assessment: >0.7 critical, >0.3 moderate, else low)
+        # so the Conclusions narrative cannot contradict the assessment table.
+        if risk > 0.7:
             rb.add_paragraph(
                 "The analysis indicates <b>critical scour risk</b>. Scour protection "
                 "measures are required. It is recommended that a detailed scour analysis "
@@ -817,7 +824,7 @@ def generate_scour_report(
                 "is recommended. Further analysis using agency-accepted methods is advised "
                 "to confirm findings and develop detailed countermeasure designs."
             )
-        elif risk > 0.2:
+        elif risk > 0.3:
             rb.add_paragraph(
                 "The analysis indicates <b>moderate scour risk</b>. Monitoring is recommended. "
                 "Consider further analysis if conditions change or if the structure is critical."
@@ -1244,7 +1251,7 @@ def generate_engineering_report(
                              f"{degradation.annual_degradation_ft:.2f} ft/yr"])
     if culvert_outlet:
         summary_rows.append(["Culvert Outlet", culvert_outlet.assessment,
-                             f"D50={culvert_outlet.required_riprap_d50_in:.0f} in"])
+                             f"D50={culvert_outlet.required_riprap_d50_in:.1f} in"])
     if bend:
         summary_rows.append(["Channel Bend", bend.assessment,
                              f"{bend.amplification_factor:.2f}x amplification"])
