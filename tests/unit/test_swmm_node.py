@@ -372,9 +372,15 @@ class TestScourRisk:
         assert risk < 0.1  # logistic at x=-1 is small
 
     def test_critical_shear_half_risk(self, node):
-        """At tau = tau_c, risk should be ~0.5 (logistic midpoint)."""
+        """At the logistic midpoint (excess ratio = scour_midpoint), risk ~0.5.
+
+        The midpoint is a per-sediment calibration (e.g. sand uses 0.8, i.e.
+        scour onset just below nominal critical shear), so evaluate at
+        tau_c * scour_midpoint rather than assuming the midpoint is tau_c.
+        """
         tau_c = node.sediment.critical_shear_psf
-        risk, shields, excess = node._compute_scour_risk(tau_c)
+        m = node.sediment.scour_midpoint
+        risk, shields, excess = node._compute_scour_risk(tau_c * m)
         assert abs(risk - 0.5) < 0.05
 
     def test_high_shear_high_risk(self, node):
