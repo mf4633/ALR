@@ -390,7 +390,7 @@ class VortexParticleField:
         self.W = hydraulics.width
         self.H = hydraulics.depth
 
-        # Observation zone (quantum measurement location)
+        # Observation zone (location of interest for resolution concentration)
         self.obs_center = np.array([length / 2, hydraulics.width / 2, hydraulics.depth / 2])
         self.obs_radius = 25.0
         self.observation_active = True
@@ -554,7 +554,7 @@ class VortexParticleField:
 
     def get_adaptive_core_size(self, position: np.ndarray) -> float:
         """
-        Compute observation-dependent core size (THE QUANTUM PART).
+        Compute observation-dependent core size.
 
         Near observation zone: Small sigma -> high resolution
         Far from observation: Large sigma -> coarse approximation

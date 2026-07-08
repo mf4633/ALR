@@ -2,7 +2,7 @@
 
 Physics-based vortex particle simulation for open-channel scour screening with PCSWMM integration.
 
-**Replaces Manning's equation with first-principles fluid mechanics** (Colebrook-White friction, Biot-Savart velocity induction, Kolmogorov cascade turbulence) while keeping computation fast enough for routine engineering screening.
+**Replaces Manning's equation with mechanistic fluid mechanics** (Colebrook-White friction, Biot-Savart velocity induction, Kolmogorov cascade scaling) while keeping computation fast enough for routine engineering screening.
 
 [![Tests](https://img.shields.io/badge/tests-109%20passing-brightgreen)]()
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
@@ -10,17 +10,25 @@ Physics-based vortex particle simulation for open-channel scour screening with P
 
 ## Key Innovation
 
-**Observation-dependent resolution** — computational effort concentrates where engineers need measurements (bridge piers, scour-prone junctions) while maintaining coarse approximation elsewhere. 5x resolution enhancement at observation centers. 12x particle reduction with 0.2% vorticity error.
+**Observation-dependent resolution** — the particle core size (sigma) is reduced
+near locations where engineers need measurements (bridge piers, scour-prone
+junctions) and left coarse elsewhere, so detail is concentrated where it matters:
 
 ```
 sigma = sigma_base / (1 + 4 * exp(-(dist / obs_radius)^2))
 ```
 
+This gives up to a 5x reduction in core size at observation centers. Note that
+it concentrates resolution but does **not** add particles (degrees of freedom),
+so it is not a mesh-convergent refinement — see
+[LIMITATIONS.md](quantum_hydraulics/LIMITATIONS.md) for what the volume-weighted
+vortex statistics do and do not guarantee as particle count changes.
+
 ## What It Does
 
 | Capability | Description |
 |-----------|-------------|
-| **ALR Vortex Particles** | Symmetrized Biot-Savart kernel (Barba & Rossi 2010) with 0.03% circulation conservation |
+| **ALR Vortex Particles** | Biot-Savart induction with a symmetrized variable core and algebraic (Rosenhead-Moore) regularization; volume-weighted particle strengths |
 | **Scour Screening** | Sediment-dependent severity index, Shields parameter, Meyer-Peter Muller transport |
 | **Quasi-Unsteady Sediment** | Fractional transport, Hirano active-layer armoring, Exner morphodynamic feedback |
 | **Engineering Scenarios** | Bank erosion, bed degradation, culvert outlet, channel bend |
@@ -163,14 +171,21 @@ pip install numpy scipy matplotlib reportlab
 pip install pyswmm pandas  # optional, for PCSWMM integration
 ```
 
-## Physics — Not Empiricism
+## Mechanistic vs. Lumped-Empirical
+
+This package favors mechanistic, physically-grounded closures over lumped
+single-parameter ones. Several of these closures (Colebrook-White, the log law,
+the 1/7 power law, Meyer-Peter Muller) are themselves semi-empirical
+correlations — the distinction here is that they resolve the relevant physics
+(roughness, shear profile, grain-fraction transport) rather than collapsing it
+into a single fitted coefficient.
 
 | This Package | Instead Of |
 |-------------|-----------|
 | Colebrook-White friction factor | Manning's n |
 | Log-law + 1/7th power velocity profile | Bulk average velocity |
 | Biot-Savart vortex induction | k-epsilon turbulence model |
-| Symmetrized variable-blob kernel | Uniform mesh CFD |
+| Symmetrized variable-core kernel | Uniform mesh CFD |
 | Meyer-Peter Muller per grain fraction | Single d50 transport |
 | Hirano active-layer armoring | Static bed assumption |
 | Egiazaroff hiding/exposure | Uniform critical shear |
