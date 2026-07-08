@@ -13,6 +13,74 @@ from quantum_hydraulics.integration.swmm_2d import (
     RHO, NU, G, _vectorized_colebrook_white, _vectorized_scour_risk,
 )
 from quantum_hydraulics.integration.swmm_node import SedimentProperties
+from quantum_hydraulics.validation.hec18_scour import critical_velocity
+
+
+# ── Transport-continuity general (contraction) scour ─────────────────────────
+
+def incipient_tau_c_psf(d50_ft: float, y_ref_ft: float = 10.0,
+                        roughness_ks: float = 0.1) -> float:
+    """
+    Incipient-motion critical shear (psf) anchored to the HEC-18 critical
+    velocity Vc (an INDEPENDENT incipient-motion formulation of the same
+    physics -- a non-circular cross-check, not a fit to a design curve).
+    """
+    Vc = critical_velocity(y_ref_ft, d50_ft)
+    Re = np.array([max(Vc * y_ref_ft / NU, 100.0)])
+    epsD = np.array([roughness_ks / (4.0 * y_ref_ft)])
+    f = float(_vectorized_colebrook_white(Re, epsD)[0])
+    u_star = Vc * np.sqrt(f / 8.0)
+    return RHO * u_star ** 2
+
+
+def _mpm_qv(V, y, d50_ft, tau_c_psf, rho_s=5.14, roughness_ks=0.1):
+    """Meyer-Peter-Muller volumetric transport per unit width (ft^2/s)."""
+    Re = np.array([max(V * y / NU, 100.0)])
+    epsD = np.array([roughness_ks / (4.0 * max(y, 0.01))])
+    f = float(_vectorized_colebrook_white(Re, epsD)[0])
+    tau = RHO * (V * np.sqrt(f / 8.0)) ** 2
+    denom = (rho_s - RHO) * G * d50_ft
+    ts = tau / denom
+    tsc = tau_c_psf / denom
+    if ts <= tsc:
+        return 0.0
+    s = rho_s / RHO
+    return 8.0 * (ts - tsc) ** 1.5 * np.sqrt((s - 1.0) * G * d50_ft ** 3)
+
+
+def contraction_scour_equilibrium(Q, W1, y1, W2, d50_ft, tau_c_psf=None,
+                                  roughness_ks=0.1, rho_s=5.14):
+    """
+    Equilibrium general (contraction) scour depth from sediment continuity:
+    close the tool's Meyer-Peter-Muller transport by requiring transport out of
+    the contracted section to equal the upstream supply, and solve for the
+    contracted depth y2 (ys = y2 - y1).
+
+    This is a LIKE-FOR-LIKE, physically comparable quantity to Laursen live-bed
+    contraction scour (both are reach-scale sediment-continuity phenomena), so
+    agreement is a meaningful cross-check against an independent transport law --
+    unlike CSU pier scour, which is an equilibrium *local* depth the tool does
+    not compute. See docs/DESIGN_calibration_fix.md.
+    """
+    if tau_c_psf is None:
+        tau_c_psf = incipient_tau_c_psf(d50_ft, y1, roughness_ks)
+    V1 = Q / (W1 * y1)
+    supply = _mpm_qv(V1, y1, d50_ft, tau_c_psf, rho_s, roughness_ks) * W1
+
+    def resid(y2):
+        V2 = Q / (W2 * y2)
+        return _mpm_qv(V2, y2, d50_ft, tau_c_psf, rho_s, roughness_ks) * W2 - supply
+
+    lo, hi = y1, 6.0 * y1
+    if resid(lo) <= 0:
+        return 0.0
+    for _ in range(80):
+        mid = 0.5 * (lo + hi)
+        if resid(mid) > 0:
+            lo = mid
+        else:
+            hi = mid
+    return max(0.5 * (lo + hi) - y1, 0.0)
 
 
 # ── Permissible shear (USACE EM 1110-2-1601) ─────────────────────────────

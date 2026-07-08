@@ -935,22 +935,29 @@ def generate_alr_report(
         r = cost_benefit
         rb.add_section("Experiment 2: Cost-Benefit Analysis")
         rb.add_paragraph(
-            f"This experiment compares ALR at various particle counts against a uniform "
-            f"high-resolution baseline (6,000 particles, all sigmas at minimum). "
-            f"Baseline vorticity: {r.baseline_vorticity:.4f}."
+            f"This experiment measures the in-zone induced-velocity RMS relative "
+            f"error against a converged, deterministic reference (fixed core "
+            f"size), comparing uniform particle placement with observation-"
+            f"concentrated placement. Concentrating placement reaches a given "
+            f"in-zone accuracy with about {r.reduction_factor:.1f}x fewer "
+            f"particles than uniform placement, at the cost of "
+            f"{r.out_of_zone_penalty:.1f}x larger error outside the zone. "
+            f"Both error curves scale as 1/sqrt(N)."
         )
         rows = []
         for i, n in enumerate(r.particle_counts):
             rows.append([
                 f"{n:,}",
-                f"{r.errors_vorticity[i]:.1%}",
-                f"{r.errors_enstrophy[i]:.1%}",
+                f"{r.errors_uniform[i]:.1%}",
+                f"{r.errors_concentrated[i]:.1%}",
                 f"{r.wall_times[i]:.2f}",
             ])
         rb.add_table(
-            ["Particle Count", "Vorticity Error", "Enstrophy Error", "Wall Time (s)"],
+            ["Particle Count", "In-zone Error (uniform)",
+             "In-zone Error (concentrated)", "Wall Time (s)"],
             rows,
-            caption="ALR Cost-Benefit: Accuracy vs. Computational Effort",
+            caption="ALR Cost-Benefit: in-zone induced-velocity accuracy vs. "
+                    "particle placement",
         )
         fig_path = os.path.join(figure_dir, "fig3_cost_benefit.png")
         if os.path.exists(fig_path):

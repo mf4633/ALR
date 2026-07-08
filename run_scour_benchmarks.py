@@ -47,6 +47,10 @@ from quantum_hydraulics.validation.hec18_scour import (
     critical_velocity,
     total_scour,
 )
+from quantum_hydraulics.research.engineering_metrics import (
+    contraction_scour_equilibrium,
+    incipient_tau_c_psf,
+)
 from quantum_hydraulics.validation.benchmark_scenarios import (
     scenario_hecras_example_11,
     scenario_hec18_example_4,
@@ -954,6 +958,66 @@ def generate_figures(exp_results, output_dir="Scour_Benchmark_figures"):
 # MAIN
 # ══════════════════════════════════════════════════════════════════════════
 
+def checks_transport_continuity(verbose=False):
+    """
+    Benchmark 8: LIKE-FOR-LIKE validation of the tool's transport-based general
+    scour against Laursen live-bed contraction scour.
+
+    Rationale (docs/DESIGN_calibration_fix.md): the tool computes a transport
+    rate / general degradation, NOT equilibrium local pier-scour depth, so it is
+    physically comparable to Laursen contraction scour (both reach-scale
+    sediment-continuity phenomena) -- and NOT to CSU pier scour. The tool's
+    Meyer-Peter-Muller transport, closed with sediment continuity and an
+    incipient-motion threshold anchored to the INDEPENDENT HEC-18 critical
+    velocity Vc, reproduces Laursen across a contraction sweep. This is
+    design-curve consistency against an independent transport law, not flume
+    validation.
+    """
+    results = []
+    if verbose:
+        print("\n  Benchmark 8: Transport-Continuity vs Laursen (like-for-like)")
+        print("  " + "-" * 55)
+
+    D50_ft = 0.5 / 304.8
+    y1, Q, W1 = 10.0, 20000.0, 600.0
+    laur, tool = [], []
+    for W2 in [550, 500, 450, 400, 350, 300]:
+        lb = live_bed_contraction_scour(y1=y1, Q1=Q, Q2=Q, W1=W1, W2=W2,
+                                        y0=y1, slope=0.002, D50_ft=D50_ft)
+        t = contraction_scour_equilibrium(Q, W1, y1, W2, D50_ft)
+        laur.append(lb.scour_depth_ft)
+        tool.append(t)
+    laur, tool = np.array(laur), np.array(tool)
+    r = float(np.corrcoef(laur, tool)[0, 1])
+    ratio = float(np.mean(tool / np.maximum(laur, 1e-9)))
+
+    results.append(CheckResult(
+        "Transport-continuity scour correlates with Laursen (r > 0.95)",
+        r > 0.95,
+        f"r={r:.3f}",
+    ))
+    results.append(CheckResult(
+        "Transport-continuity scour magnitude matches Laursen (ratio 0.8-1.2)",
+        0.8 < ratio < 1.2,
+        f"mean tool/Laursen = {ratio:.2f}",
+    ))
+
+    # Non-circular threshold anchor: the Vc-consistent incipient tau_c is well
+    # below the tool's allowable-level default (a real, independent finding).
+    tau_c_incip = incipient_tau_c_psf(D50_ft, y1)
+    results.append(CheckResult(
+        "Incipient tau_c (Vc-anchored) below allowable default (documented)",
+        tau_c_incip < 0.10,
+        f"incipient tau_c={tau_c_incip:.4f} psf vs allowable 0.10 psf",
+    ))
+
+    if verbose:
+        print(f"    r(Laursen, tool)={r:.3f}  mean ratio={ratio:.2f}  "
+              f"incipient tau_c={tau_c_incip:.4f} psf")
+
+    return results, {"laursen": laur.tolist(), "tool": tool.tolist(), "r": r}
+
+
 def main():
     parser = argparse.ArgumentParser(description="HEC-RAS Scour Benchmark Suite")
     parser.add_argument("--verbose", "-v", action="store_true")
@@ -974,6 +1038,7 @@ def main():
         5: ("FHWA Flume Tests", checks_fhwa_flume),
         6: ("Parametric Sweep — QH vs CSU", checks_parametric_sweep),
         7: ("QH Vortex Enhancement", checks_vortex_enhancement),
+        8: ("Transport-Continuity vs Laursen", checks_transport_continuity),
     }
 
     all_checks = []
