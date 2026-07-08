@@ -300,7 +300,7 @@ def scenario_hec18_example_2() -> ScourScenario:
                             "HEC-18 Example 2, CSU with K4"),
         ],
 
-        notes="K2=1.25 (theta=7.5°, L/a=4). "
+        notes="K2=1.31 (theta=7.5°, L/a=4, per (cos θ + (L/a) sin θ)^0.65). "
               "D50=0.75 ft triggers K4 armoring correction.",
     )
 
