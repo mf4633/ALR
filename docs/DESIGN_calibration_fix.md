@@ -1,5 +1,7 @@
 # Verified Design Spec: calibration fix
 
+> **STATUS: IMPLEMENTED (validation) + DOCUMENTED (recalibration).** Added `contraction_scour_equilibrium` + `incipient_tau_c_psf` to engineering_metrics.py and benchmark #8 (transport-continuity vs Laursen, r=1.000, ratio 0.98). Option A (fit alpha to CSU) rejected as circular/unphysical, per this analysis. The GLOBAL Vc-anchoring of the tuned MPM threshold (which changes reported scour) is left as an author calibration decision; the finding (incipient tau_c ~4.4x below the allowable default) is now validated in the suite.
+
 > Produced by a design+prototype workflow (agents derived, built runnable /tmp prototypes, and measured real results). The adversarial/synth stages were cut short by a session limit, but each design self-verified with runnable evidence. Numbers below are measured, not asserted.
 
 I have all the evidence I need. Here is my analysis and recommendation.
