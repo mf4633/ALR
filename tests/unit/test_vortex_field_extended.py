@@ -265,3 +265,56 @@ class TestRepr:
         assert "L=" in r
         assert "W=" in r
         assert "H=" in r
+
+
+# =============================================================================
+# TestOverlapDiagnostic
+# =============================================================================
+
+class TestOverlapDiagnostic:
+    """Tests for overlap_ratio() and observation_zone_mask()."""
+
+    def test_overlap_ratio_keys(self, small_field):
+        stats = small_field.overlap_ratio()
+        assert set(stats) == {"mean", "median", "frac_gt_1", "n"}
+        assert stats["n"] == len(small_field._positions)
+
+    def test_overlap_ratio_empty_safe(self, hydraulics):
+        field = VortexParticleField(hydraulics, n_particles=100)
+        empty_mask = np.zeros(len(field._positions), dtype=bool)
+        stats = field.overlap_ratio(empty_mask)
+        assert stats["n"] == 0
+        assert np.isnan(stats["mean"])
+
+    def test_overlap_ratio_positive(self, small_field):
+        stats = small_field.overlap_ratio()
+        assert stats["mean"] > 0
+        assert 0.0 <= stats["frac_gt_1"] <= 1.0
+
+    def test_observation_zone_mask_inactive_is_empty(self, small_field):
+        small_field.toggle_observation(False)
+        mask = small_field.observation_zone_mask()
+        assert mask.sum() == 0
+
+    def test_observation_zone_selects_subset(self, small_field):
+        small_field.set_observation([25, 15, 2.5], radius=8)
+        mask = small_field.observation_zone_mask()
+        # Some but not all particles should be inside a small zone
+        assert 0 < mask.sum() < len(small_field._positions)
+
+    def test_shrinking_sigma_without_particles_breaks_overlap(self, hydraulics):
+        """Documents flaw #2: shrinking sigma in the obs zone without adding
+        particles raises h/sigma there above the well-resolved exterior."""
+        field = VortexParticleField(hydraulics, length=100, n_particles=2000)
+        field.set_observation([50, 15, 2.5], radius=10)
+        field._sigmas = field._get_adaptive_core_sizes_batch(field._positions)
+
+        in_zone = field.observation_zone_mask()
+        outside = ~in_zone
+
+        r_in = field.overlap_ratio(in_zone)["mean"]
+        r_out = field.overlap_ratio(outside)["mean"]
+
+        # Exterior is well overlapped (~1); interior is under-resolved (>~2)
+        assert r_out < 1.6
+        assert r_in > r_out

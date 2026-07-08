@@ -733,6 +733,82 @@ class VortexParticleField:
         omega_mag_sq = np.sum(self._vorticities ** 2, axis=1)
         return omega_mag_sq * self._sigmas ** 3
 
+    def overlap_ratio(self, mask: Optional[np.ndarray] = None) -> dict:
+        """
+        Diagnose the vortex-blob overlap condition h / sigma.
+
+        Vortex particle methods are only accurate when neighbouring blobs
+        overlap, i.e. the local inter-particle spacing ``h`` is at most of order
+        the core size ``sigma`` (h / sigma <~ 1).  Reducing sigma in an
+        observation zone *without* adding particles leaves ``h`` unchanged, so
+        h / sigma rises and the field becomes under-resolved exactly where the
+        highest resolution is advertised.  This method quantifies that: values
+        well above 1 indicate the overlap condition is violated.
+
+        Parameters
+        ----------
+        mask : np.ndarray, optional
+            Boolean mask selecting a subset of particles (e.g. an observation
+            zone).  If omitted, all particles are used.
+
+        Returns
+        -------
+        dict
+            ``{"mean", "median", "frac_gt_1", "n"}`` for h / sigma over the
+            selected particles.  Empty-safe (returns NaNs / 0 for < 2 points).
+        """
+        pos = self._positions
+        sig = self._sigmas
+        if mask is not None:
+            pos = pos[mask]
+            sig = sig[mask]
+        n = len(pos)
+        if n < 2:
+            return {"mean": float("nan"), "median": float("nan"),
+                    "frac_gt_1": float("nan"), "n": n}
+
+        if cKDTree is not None:
+            tree = cKDTree(pos)
+            # k=2: nearest neighbour excluding self
+            dist, _ = tree.query(pos, k=2)
+            h = dist[:, 1]
+        else:
+            # O(N^2) fallback
+            h = np.empty(n)
+            for i in range(n):
+                d = np.linalg.norm(pos - pos[i], axis=1)
+                d[i] = np.inf
+                h[i] = d.min()
+
+        ratio = h / np.maximum(sig, 1e-12)
+        return {
+            "mean": float(ratio.mean()),
+            "median": float(np.median(ratio)),
+            "frac_gt_1": float(np.mean(ratio > 1.0)),
+            "n": int(n),
+        }
+
+    def observation_zone_mask(self, factor: float = 1.0) -> np.ndarray:
+        """
+        Boolean mask of particles inside the (single- or multi-zone) observation
+        region, each zone taken as a sphere of ``factor * radius``.
+
+        Returns an all-False mask when observation is inactive.
+        """
+        n = len(self._positions)
+        if not self.observation_active or n == 0:
+            return np.zeros(n, dtype=bool)
+
+        zones = self.obs_zones if self.obs_zones is not None else [
+            (self.obs_center, self.obs_radius)
+        ]
+        mask = np.zeros(n, dtype=bool)
+        for center, radius in zones:
+            center = np.asarray(center, dtype=np.float64)
+            dist = np.linalg.norm(self._positions - center, axis=1)
+            mask |= dist < (factor * radius)
+        return mask
+
     def set_observation(self, center: np.ndarray, radius: float):
         """
         Set observation zone location and size.
