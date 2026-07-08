@@ -58,14 +58,23 @@ It does **not** include:
 
 ### Induced-Velocity Field Is Not Discretization-Independent
 
-The vorticity field is seeded as a **random-phase turbulence proxy** (random
-orientations drawn per particle), not a coherent resolved vorticity
-distribution. The Biot-Savart induction now correctly weights each particle by
-its volume element (strength = omega * Vol), which fixes the units and the
-previous sqrt(N) growth of the induced velocity with particle count. However,
-because the seeds are random-phase, the *net* induced velocity is a random walk
-whose magnitude scales like 1/sqrt(N). It therefore does **not** converge to a
-fixed value as particles are added.
+By default the vorticity field is seeded as a **random-phase turbulence proxy**
+(`seeding="random"`; random orientations per particle), not a coherent resolved
+vorticity distribution. The Biot-Savart induction correctly weights each
+particle by its volume element (strength = omega * Vol), which fixes the units
+and the previous sqrt(N) growth of the induced velocity with particle count.
+However, because the *random-phase* seeds average to zero, the net induced
+velocity is a random walk whose magnitude scales like 1/sqrt(N); with this seed
+the field does **not** converge to a fixed value as particles are added.
+
+A coherent seeding option (`seeding="coherent"`) addresses this: it seeds the
+mean-shear vorticity `omega = du/dz` (a deterministic, resolved field), for which
+the ensemble-mean induced velocity converges to a stable non-zero limit as N
+grows (demonstrated in `run_convergence_study.py`). Combined with conservative
+refinement (`enable_refinement=True`), this is the configuration in which the
+adaptive-Lagrangian-refinement claim holds. Both options are **off by default**
+pending recalibration of the empirical 2D scour model against the new field
+(see docs/ALR_REFINEMENT_DESIGN.md, Phase 5).
 
 Consequences:
 - The adaptive-resolution ("ALR") behavior concentrates core size (sigma) near

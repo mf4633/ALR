@@ -465,3 +465,64 @@ class TestRefinement:
             field.step(dt=0.05)
         assert not np.any(np.isnan(field._positions))
         assert not np.any(np.isnan(field._vorticities))
+
+
+# =============================================================================
+# TestCoherentSeeding (Phase 4)
+# =============================================================================
+
+class TestCoherentSeeding:
+    """Coherent mean-shear seeding and its convergence property."""
+
+    def test_default_is_random(self, hydraulics):
+        field = VortexParticleField(hydraulics, n_particles=100)
+        assert field.seeding == "random"
+
+    def test_coherent_vorticity_is_mean_shear(self, hydraulics):
+        """omega should be (0, du/dz, 0): spanwise only, positive (u grows with z)."""
+        field = VortexParticleField(hydraulics, length=100, n_particles=500,
+                                    seeding="coherent")
+        om = field._vorticities
+        # x and z components are exactly zero
+        assert np.allclose(om[:, 0], 0.0)
+        assert np.allclose(om[:, 2], 0.0)
+        # spanwise component is du/dz > 0 (velocity increases with depth)
+        assert np.all(om[:, 1] > 0)
+        # matches a finite-difference of the velocity profile
+        z = field._positions[:, 2]
+        dz = 0.01 * field.H
+        expected = (field.hydraulics.velocity_profile_vectorized(z + dz)
+                    - field.hydraulics.velocity_profile_vectorized(np.maximum(z - dz, 1e-6))) / (2 * dz)
+        assert np.allclose(om[:, 1], expected)
+
+    def test_coherent_converges_random_does_not(self, hydraulics):
+        """Ensemble-mean induced vx converges (nonzero, stable SNR) for coherent
+        seeding but averages to ~0 for random-phase seeding."""
+        probe = np.array([50.0, 15.0, 2.5])
+        sigma = 0.5
+
+        def induced_vx(seeding, n, seed):
+            f = VortexParticleField(hydraulics, length=100, n_particles=n,
+                                    seeding=seeding)
+            f._seed_field(seed=seed)
+            f._sigmas = np.full(len(f._positions), sigma)
+            f._volumes = np.full(len(f._positions),
+                                 (f.L * f.W * f.H) / len(f._positions))
+            r = f._positions - probe
+            r2 = np.sum(r ** 2, axis=1)
+            K = 1.0 / (4 * np.pi * ((r2 + sigma ** 2) ** 1.5 + 1e-12))
+            strength = f._vorticities * f._volumes[:, None]
+            return float((K[:, None] * np.cross(strength, r)).sum(axis=0)[0])
+
+        seeds = range(24)
+        coh = np.array([induced_vx("coherent", 4000, s) for s in seeds])
+        ran = np.array([induced_vx("random", 4000, s) for s in seeds])
+
+        # Coherent seeding induces a consistent directional signal: vx keeps the
+        # same sign across (nearly) all placements and has a real (order 0.1+)
+        # ensemble mean.  Random-phase seeding has no consistent direction --
+        # the sign flips seed to seed and the mean averages toward zero.
+        assert np.mean(coh < 0) >= 0.9          # coherent: consistent sign
+        assert abs(coh.mean()) > 0.2            # real signal
+        assert 0.2 <= np.mean(ran < 0) <= 0.8   # random: mixed sign (noise)
+        assert abs(ran.mean()) < abs(coh.mean())

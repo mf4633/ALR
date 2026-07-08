@@ -384,8 +384,14 @@ class VortexParticleField:
         hydraulics: HydraulicsEngine,
         length: float = 200.0,
         n_particles: int = 6000,
+        seeding: str = "random",
     ):
         self.hydraulics = hydraulics
+        # Vorticity seeding mode: "random" (isotropic turbulence proxy, the
+        # historical default) or "coherent" (deterministic mean-shear vorticity
+        # omega = du/dz, which has a converged limit -- see _seed_coherent and
+        # docs/ALR_REFINEMENT_DESIGN.md).
+        self.seeding = seeding
         self.L = length
         self.W = hydraulics.width
         self.H = hydraulics.depth
@@ -438,7 +444,7 @@ class VortexParticleField:
         self._build_velocity_lut()
 
         # Initialize particles
-        self._seed_particles()
+        self._seed_field()
 
         # Volume element carried by each particle.  A vortex particle represents
         # the vorticity integrated over a finite region: strength = omega * Vol
@@ -491,6 +497,56 @@ class VortexParticleField:
         if self._velocity_lut_z is None:
             self._build_velocity_lut()
         return np.interp(z, self._velocity_lut_z, self._velocity_lut_v)
+
+    def _seed_field(self, seed: int = 42):
+        """Seed the vorticity field according to ``self.seeding``."""
+        if self.seeding == "coherent":
+            self._seed_coherent(seed)
+        else:
+            self._seed_particles(seed)
+
+    def _seed_coherent(self, seed: int = 42):
+        """
+        Seed a coherent (resolved) mean-shear vorticity field.
+
+        The mean streamwise flow ``u(z)`` has vorticity ``omega = curl(u) =
+        (0, du/dz, 0)`` -- a deterministic, spanwise vorticity sheet rather than
+        isotropic random turbulence.  Because the vorticity is a fixed function
+        of position (not zero-mean noise), the discrete Biot-Savart sum has a
+        non-trivial converged limit: the ensemble-mean induced velocity settles
+        on a stable value with signal-to-noise growing like sqrt(N), whereas the
+        random-phase seed averages to zero.  This is the seeding required before
+        refinement can be validated as convergent (see
+        docs/ALR_REFINEMENT_DESIGN.md).
+
+        Positions are drawn uniformly in the interior; only the vorticity differs
+        from the random seed.
+        """
+        rng = np.random.default_rng(seed)
+        n = self.n_particles
+
+        positions = np.column_stack([
+            rng.uniform(0.1 * self.L, 0.9 * self.L, n),
+            rng.uniform(0.1 * self.W, 0.9 * self.W, n),
+            rng.uniform(0.1 * self.H, 0.9 * self.H, n),
+        ])
+
+        # Mean-shear vorticity omega_y = du/dz via central difference on the
+        # (log-law + power-law) velocity profile.
+        dz = 0.01 * self.H
+        zc = positions[:, 2]
+        u_plus = self.hydraulics.velocity_profile_vectorized(zc + dz)
+        u_minus = self.hydraulics.velocity_profile_vectorized(
+            np.maximum(zc - dz, 1e-6))
+        dudz = (u_plus - u_minus) / (2.0 * dz)
+
+        vorticities = np.zeros((n, 3), dtype=np.float64)
+        vorticities[:, 1] = dudz
+
+        self._positions = positions
+        self._vorticities = vorticities
+        self._sigmas = self._get_adaptive_core_sizes_batch(positions)
+        self._ages = np.zeros(n, dtype=np.float64)
 
     def _seed_particles(self, seed: int = 42):
         """
@@ -1173,7 +1229,7 @@ class VortexParticleField:
         self.base_sigma = self.H / 5.0
         self.min_sigma = hydraulics.eta_kolmogorov * 3
         self._build_velocity_lut()
-        self._seed_particles()
+        self._seed_field()
         self._ref_volume = self._reference_particle_volume()
         self._volumes = np.full(len(self._positions), self._ref_volume,
                                 dtype=np.float64)

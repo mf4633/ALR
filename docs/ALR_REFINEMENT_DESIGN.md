@@ -132,24 +132,37 @@ refinement can converge to.
    under the cap; total strength `sum(omega*Vol)` and total volume conserved to
    ~1e-15 / ~1e-12. Unit tests cover conservation, overlap restoration, cap, and
    multi-step stability.
-4. **Coherent seeding (todo).** Required for convergence; option to seed the
-   mean-shear vorticity plus prescribed coherent structures instead of random
-   phase. Then run the convergence study across particle budgets.
+4. **Coherent seeding (done, opt-in `seeding="coherent"`).** Seed the mean-shear
+   vorticity `omega = du/dz` (spanwise) from the velocity profile instead of
+   isotropic random phase. Convergence study (`run_convergence_study.py`): the
+   ensemble-mean induced streamwise velocity at a fixed probe settles on a
+   stable non-zero limit (~-0.37 ft/s; drift < 2 % past N=2000) with SNR growing
+   1.2 -> 5.3 across N=500..8000, whereas random-phase seeding averages to ~0
+   (SNR ~0). Pier/coherent structures continue to enter via the existing pier
+   shedding.
 5. **Recalibrate (todo).** The 2D scour model (`swmm_node.py` kernel + `1.2x`
-   floor + logistic params) against the refined field, and unify the two
-   induction kernels.
-6. Flip refinement on by default only after 4-5 validate; update the paper's
-   claims to match the measured convergence.
+   floor + logistic params) against the refined + coherently-seeded field, and
+   unify the two induction kernels.
+6. Flip refinement + coherent seeding on by default only after 5 validates;
+   update the paper's claims to match the measured convergence.
 
-### Status note (Phase 3)
+### Status note (Phases 3-4)
 
-Refinement now restores the overlap condition by adding degrees of freedom, so
-the "adaptive Lagrangian refinement" mechanism is real and conservative. It is
-**off by default** and does not change any reported result until enabled.
-Turning it on is deferred until Phase 4 (coherent seeding), because refining a
-random-phase field improves overlap but still has no converged limit to
-approach (see the `1/sqrt(N)` note above); a convergence study only becomes
-meaningful once the seed is coherent.
+Refinement now restores the overlap condition by adding degrees of freedom
+(conservatively), and coherent seeding gives the field a converged limit to
+approach -- the two pieces the "adaptive Lagrangian refinement" claim needs.
+Both are **off by default** (`enable_refinement=False`, `seeding="random"`) and
+change no reported result until enabled. What remains before enabling by default
+is Phase 5: recalibrating the empirically-tuned 2D scour model (and unifying the
+duplicate induction kernel) against the new field, since its `1.2x` floor and
+logistic parameters were fitted to the old random-phase magnitudes.
+
+Note on the convergence metric: pointwise induced velocity from a *regularized*
+vortex field is resolution-sensitive when `sigma` shrinks with `N` (the kernel
+itself changes), so the convergence study holds `sigma` fixed and refines only
+the quadrature -- the appropriate way to isolate the seeding effect. Full
+pointwise convergence under simultaneous `sigma -> 0` is a weak/integral
+statement and is out of scope for the screening tool.
 
 ## 7. Validation criteria
 
