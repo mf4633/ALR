@@ -35,6 +35,40 @@ MIN_INFLOW = 0.05  # cfs
 # Output directory
 OUTPUT_DIR = os.path.join(os.path.expanduser("~"), "Documents", "quantum_results")
 
+# Flow-unit -> cfs conversion factors (pyswmm FLOW_UNITS)
+_FLOW_TO_CFS = {
+    "CFS": 1.0,          # US: already cfs
+    "GPM": 0.00222801,   # US gal/min
+    "MGD": 1.54722865,   # US million gal/day
+    "CMS": 35.3146667,   # SI m^3/s
+    "LPS": 0.0353146667,  # SI L/s
+    "MLD": 0.408734569,  # SI ML/day
+}
+
+
+def _us_conversion_factors(sim):
+    """
+    Return (depth_to_ft, inflow_to_cfs) factors to convert a SWMM model's native
+    units to US units, which QuantumNode requires.
+
+    Length is metres for SI models (system_units == 'SI') and feet for US;
+    inflow is scaled by the model's FLOW_UNITS.
+    """
+    flow_units = str(getattr(sim, "flow_units", "CFS")).upper()
+    system_units = str(getattr(sim, "system_units", "US")).upper()
+
+    inflow_to_cfs = _FLOW_TO_CFS.get(flow_units)
+    if inflow_to_cfs is None:
+        print(f"WARNING: unrecognized FLOW_UNITS '{flow_units}'; assuming cfs.")
+        inflow_to_cfs = 1.0
+
+    depth_to_ft = 3.280839895 if system_units == "SI" else 1.0
+
+    if system_units == "SI" or flow_units in ("CMS", "LPS", "MLD"):
+        print(f"Converting SI model to US units "
+              f"(depth x{depth_to_ft:.4f} ft/m, inflow x{inflow_to_cfs:.5f} cfs/{flow_units}).")
+    return depth_to_ft, inflow_to_cfs
+
 
 def get_current_model() -> Optional[str]:
     """Try multiple methods to find currently open model."""
@@ -139,14 +173,10 @@ def run_quantum_analysis(
         with Simulation(model_file) as sim:
             nodes = Nodes(sim)
 
-            # Unit-system guard: QuantumNode is hardwired to US units (ft, cfs,
-            # slug/ft^3, 32.2 ft/s^2). A metric (CMS/LPS) SWMM model returns
-            # meters/cms from pyswmm, which would be silently mis-analyzed.
-            flow_units = getattr(sim, "flow_units", "CFS")
-            if flow_units not in ("CFS", "GPM", "MGD"):
-                print(f"WARNING: model FLOW_UNITS = {flow_units} (non-US). This "
-                      f"tool assumes US units (feet, cfs); results for this model "
-                      f"will be INCORRECT. Convert the model to US units first.")
+            # QuantumNode is hardwired to US units (ft, cfs, slug/ft^3, 32.2
+            # ft/s^2). pyswmm returns depth in the model's length units and
+            # inflow in its FLOW_UNITS, so convert both to ft / cfs at ingestion.
+            depth_to_ft, inflow_to_cfs = _us_conversion_factors(sim)
 
             for step in sim:
                 timestep_count += 1
@@ -155,8 +185,8 @@ def run_quantum_analysis(
                 for node_id, quantum_node in quantum_nodes.items():
                     try:
                         node = nodes[node_id]
-                        depth = node.depth
-                        inflow = node.total_inflow
+                        depth = node.depth * depth_to_ft
+                        inflow = node.total_inflow * inflow_to_cfs
 
                         if depth > MIN_DEPTH and inflow > MIN_INFLOW:
                             quantum_node.update_from_swmm(depth, inflow)
