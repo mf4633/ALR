@@ -83,19 +83,17 @@ Consequences:
 - Claims of "same answer with fewer particles" hold only for the qualitative,
   volume-weighted statistics, not for a pointwise-convergent velocity field.
 
-**Two induction kernels exist.** `core/vortex_field.py` (the 1D/ALR field) and
-`integration/swmm_node.py` (`_compute_velocity_induction_fast`, used by the 2D
-Tier 2 pipeline) implement Biot-Savart separately. The core version has been
-corrected (symmetrized variable core, single algebraic regularization, volume
-weight). The `swmm_node.py` copy is **left unchanged on purpose**: the 2D scour
-model is empirically calibrated around its current magnitudes -- effective
-friction velocity is `max(u*_turb, 1.2 * u*_base)` and scour uses a tuned
-logistic (`scour_steepness`, `scour_midpoint`). Re-scaling that kernel (e.g.
-adding the volume weight) would push `u*_turb` past the `1.2x` floor and change
-reported scour without a corresponding recalibration against reference data.
-These two kernels should eventually be unified and the 2D model recalibrated;
-until then, treat the 2D Tier 2 shear augmentation as a calibrated empirical
-correction, not a first-principles turbulence closure.
+**Induction kernel is now unified.** `integration/swmm_node.py` previously had a
+second Biot-Savart implementation (`_compute_velocity_induction_fast`) with the
+old double-regularized, unsymmetrized kernel; it now delegates to the corrected
+core kernel, so the 1D node, 2D mesh, and ALR field share one implementation.
+This is output-neutral for the bundled scenarios because the 2D/1D scour path
+floors the effective friction velocity at `max(u*_turb, 1.2 * u*_base)` and that
+floor dominates there (the reported pier amplification is exactly 1.2^2 = 1.44).
+The turbulence-augmentation constants are still empirically tuned, not
+first-principles: treat the Tier 2 shear augmentation as a calibrated empirical
+correction. The constants that must be refit before enabling refinement /
+coherent seeding by default are catalogued in `docs/RECALIBRATION_SPEC.md`.
 
 ### Validation Gaps
 

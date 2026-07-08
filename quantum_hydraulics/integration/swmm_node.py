@@ -19,6 +19,37 @@ except ImportError:
 
 from quantum_hydraulics.core.particle import VortexParticle
 from quantum_hydraulics.core.hydraulics import HydraulicsEngine
+from quantum_hydraulics.core.vortex_field import (
+    _compute_velocity_induction_numpy as _core_induction_numpy,
+)
+
+try:
+    from quantum_hydraulics.core.vortex_field import (
+        _compute_velocity_induction_numba as _core_induction_numba,
+    )
+except ImportError:  # numba unavailable
+    _core_induction_numba = None
+
+
+# =============================================================================
+# Biot-Savart induction (single source of truth: core.vortex_field)
+# =============================================================================
+
+def _compute_velocity_induction_fast(positions, vorticities, sigmas,
+                                     cutoff_multiplier: float = 6.0):
+    """
+    Biot-Savart velocity induction for the SWMM particle clouds.
+
+    Delegates to the corrected core kernel (symmetrized variable core, single
+    algebraic regularization) so the 1D node and 2D mesh paths use exactly the
+    same physics as VortexParticleField -- no second, divergent implementation.
+    """
+    n = positions.shape[0]
+    if _core_induction_numba is not None and n > 100:
+        return _core_induction_numba(positions, vorticities, sigmas,
+                                     cutoff_multiplier)
+    return _core_induction_numpy(positions, vorticities, sigmas, None,
+                                 cutoff_multiplier)
 
 
 # =============================================================================
@@ -26,48 +57,6 @@ from quantum_hydraulics.core.hydraulics import HydraulicsEngine
 # =============================================================================
 
 if HAS_NUMBA:
-    @njit(parallel=True, fastmath=True)
-    def _compute_velocity_induction_fast(
-        positions: np.ndarray,
-        vorticities: np.ndarray,
-        sigmas: np.ndarray,
-        cutoff_multiplier: float = 6.0
-    ) -> np.ndarray:
-        """
-        Vectorized Biot-Savart velocity induction with Numba acceleration.
-
-        Returns actual induced velocities (not vorticity magnitudes).
-        """
-        n = positions.shape[0]
-        velocities = np.zeros((n, 3), dtype=np.float64)
-
-        for i in prange(n):
-            cutoff_sq = (cutoff_multiplier * sigmas[i]) ** 2
-
-            for j in range(n):
-                if i == j:
-                    continue
-
-                rx = positions[j, 0] - positions[i, 0]
-                ry = positions[j, 1] - positions[i, 1]
-                rz = positions[j, 2] - positions[i, 2]
-                r_sq = rx * rx + ry * ry + rz * rz
-
-                if r_sq > cutoff_sq:
-                    continue
-
-                sigma_j_sq = sigmas[j] ** 2
-                denom = (r_sq + sigma_j_sq) ** 1.5 + 1e-12
-                cutoff_func = 1.0 - np.exp(-r_sq / sigma_j_sq)
-                K = cutoff_func / (4.0 * np.pi * denom)
-
-                ox, oy, oz = vorticities[j, 0], vorticities[j, 1], vorticities[j, 2]
-                velocities[i, 0] += K * (oy * rz - oz * ry)
-                velocities[i, 1] += K * (oz * rx - ox * rz)
-                velocities[i, 2] += K * (ox * ry - oy * rx)
-
-        return velocities
-
     @njit(fastmath=True)
     def _compute_metrics_fast(
         positions: np.ndarray,
@@ -126,27 +115,6 @@ if HAS_NUMBA:
 
 else:
     # Fallback implementations without Numba
-    def _compute_velocity_induction_fast(positions, vorticities, sigmas, cutoff_multiplier=6.0):
-        n = positions.shape[0]
-        velocities = np.zeros((n, 3), dtype=np.float64)
-
-        for i in range(n):
-            cutoff_sq = (cutoff_multiplier * sigmas[i]) ** 2
-            for j in range(n):
-                if i == j:
-                    continue
-                r = positions[j] - positions[i]
-                r_sq = np.dot(r, r)
-                if r_sq > cutoff_sq:
-                    continue
-                sigma_j_sq = sigmas[j] ** 2
-                denom = (r_sq + sigma_j_sq) ** 1.5 + 1e-12
-                cutoff_func = 1.0 - np.exp(-r_sq / sigma_j_sq)
-                K = cutoff_func / (4.0 * np.pi * denom)
-                velocities[i] += K * np.cross(vorticities[j], r)
-
-        return velocities
-
     def _compute_metrics_fast(positions, vorticities, sigmas, mean_velocities):
         n = positions.shape[0]
         if n == 0:

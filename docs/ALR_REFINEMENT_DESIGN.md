@@ -140,11 +140,18 @@ refinement can converge to.
    1.2 -> 5.3 across N=500..8000, whereas random-phase seeding averages to ~0
    (SNR ~0). Pier/coherent structures continue to enter via the existing pier
    shedding.
-5. **Recalibrate (todo).** The 2D scour model (`swmm_node.py` kernel + `1.2x`
-   floor + logistic params) against the refined + coherently-seeded field, and
-   unify the two induction kernels.
-6. Flip refinement + coherent seeding on by default only after 5 validates;
-   update the paper's claims to match the measured convergence.
+5. **Unify kernels (done) + recalibrate (spec'd, not yet fitted).** The
+   duplicate `swmm_node.py` induction kernel now delegates to the corrected core
+   kernel (single source of truth); this is output-neutral because the `1.2x`
+   friction-velocity floor dominates the bundled scenarios. The empirical
+   constants that must be refit before the field changes underneath them
+   (`1.2x` floor, per-sediment `scour_steepness`/`scour_midpoint`, Tier 2
+   vorticity proxy) and the reference data each needs are catalogued in
+   `docs/RECALIBRATION_SPEC.md`. Fitting them requires scour reference/flume data
+   and is intentionally left to a data-in-hand calibration pass.
+6. Flip refinement + coherent seeding on by default only after 5's recalibration
+   is fitted and validated; update the paper's claims to match the measured
+   convergence.
 
 ### Status note (Phases 3-4)
 
