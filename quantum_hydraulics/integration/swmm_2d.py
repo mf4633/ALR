@@ -417,44 +417,62 @@ class Mesh2DResults:
             width = cell_size
             length = max(2.0 * depth, cell_size)
 
-            # Inject particles throughout control volume
-            z_rand = rng.uniform(0.05 * depth, 0.95 * depth, n_particles)
-            x_rand = rng.uniform(0, length, n_particles)
-            y_rand = rng.uniform(-width / 2, width / 2, n_particles)
+            # Structured lattice placement (nz x nx x ny). A regular lattice
+            # avoids the 1/sqrt(N) sampling noise of random placement, so the
+            # induced field of a smooth mean-shear profile converges rather than
+            # producing a spurious Reynolds stress from placement scatter.
+            nz = max(int(round(n_particles ** (1.0 / 3.0))), 3)
+            nxy = max(int(round((n_particles / nz) ** 0.5)), 2)
+            zc = np.linspace(0.05 * depth, 0.95 * depth, nz)
+            xc = np.linspace(0.0, length, nxy)
+            yc = np.linspace(-width / 2, width / 2, nxy)
+            ZZ, XX, YY = np.meshgrid(zc, xc, yc, indexing="ij")
+            z_grid = ZZ.ravel()
+            positions = np.column_stack([XX.ravel(), YY.ravel(), z_grid])
 
-            positions = np.column_stack([x_rand, y_rand, z_rand])
-
-            # Vorticity from log-law velocity profile
+            # Coherent mean-shear vorticity of the log-law profile:
+            #   omega_y = du/dz = u*/(kappa z),  spanwise (+y), units 1/s.
+            # (The prior implementation seeded the *velocity* u(z) into the
+            # streamwise vorticity slot -- wrong quantity, wrong component.)
             z0 = max(self.ks / 30.0, 1e-6)
-            z_safe = np.maximum(z_rand, z0)
-            u_at_z = (u_star_base / KAPPA) * np.log(z_safe / z0)
+            z_safe = np.maximum(z_grid, z0)
+            omega_y = u_star_base / (KAPPA * z_safe)
+            vorticities = np.column_stack([
+                np.zeros_like(omega_y),
+                omega_y,
+                np.zeros_like(omega_y),
+            ])
 
             # Adaptive core size (smaller near bed)
-            sigmas = 0.05 + (z_rand / depth) * 0.4
-
-            vorticities = np.column_stack([
-                u_at_z,
-                np.zeros(n_particles),
-                np.zeros(n_particles),
-            ])
+            sigmas = 0.05 + (z_grid / depth) * 0.4
 
             # Biot-Savart velocity induction
             induced = _compute_velocity_induction_fast(
                 positions, vorticities, sigmas
             )
 
-            # Reynolds stress from induced velocity fluctuations
-            u_fluct = induced[:, 0]
-            w_fluct = induced[:, 2]
-            reynolds_stress = np.mean(u_fluct * w_fluct)
-            u_star_turb = np.sqrt(np.abs(reynolds_stress))
+            # Resolved turbulent fluctuations = deviation from the z-layer mean
+            # (the coherent mean profile). A smooth mean-shear-only field carries
+            # ~0 Reynolds stress, so bed shear is not amplified -- this is the
+            # constant-stress-layer limit -<u'w'> -> u*^2. Genuine amplification
+            # (>1) arises only from injected coherent structures (pier horseshoe
+            # / shedding vortices), whose magnitude requires empirical (flume)
+            # calibration and is not asserted here.
+            u_grid = induced[:, 0].reshape(nz, nxy, nxy)
+            w_grid = induced[:, 2].reshape(nz, nxy, nxy)
+            u_prime = u_grid - u_grid.mean(axis=(1, 2), keepdims=True)
+            w_prime = w_grid - w_grid.mean(axis=(1, 2), keepdims=True)
+            reynolds_stress = -float(np.mean(u_prime * w_prime))  # resolved -<u'w'>
 
-            # Effective friction velocity (augmented by turbulence)
-            u_star_eff = max(u_star_turb, u_star_base * 1.2)
+            # Effective friction velocity: mean base plus resolved coherent
+            # contribution (no artificial floor). Reduces to u_star_base when the
+            # resolved stress vanishes.
+            u_star_eff = np.sqrt(u_star_base ** 2 + max(reynolds_stress, 0.0))
             tau_quantum = RHO * u_star_eff ** 2
 
-            # TKE from induced velocities
-            tke = 0.5 * np.mean(np.sum(induced ** 2, axis=1))
+            # Resolved turbulent kinetic energy (screening metric)
+            fluct = induced - induced.mean(axis=0, keepdims=True)
+            tke = 0.5 * float(np.mean(np.sum(fluct ** 2, axis=1)))
 
             # Recompute scour metrics with augmented shear (calibrated).
             # Risk classifier keys off the empirical design shear.
