@@ -149,20 +149,16 @@ is the resolved turbulence-intensity / TKE field, not a shear multiplier.
 
 ## Section 4.4 (Extensibility — revise results paragraph)
 
-The surface coarsened from 0.80 mm (medium sand) to approximately 5.0 mm (fine
-gravel) — roughly a sixfold increase — forming a gravel armor that limits further
-transport, with the bed degrading on the order of a foot. *[replaces: "from
-0.80 mm to 7.2 mm — a 9× increase … 10.6 ft of clear-water scour."]* Mass is
-conserved to ~10⁻¹⁵ over the hydrograph. This self-limiting armoring is the
-primary physical mechanism controlling long-term degradation below dams and is
-consistent with field observations (Williams and Wolman, 1984). The demonstration
-is included as evidence of extensibility; full pier-scale coupling between the
-ALR vortex field and the morphodynamic engine is future work (Section 5).
-
-*[Editor note: the exact scenario inputs (peak discharge, hydrograph durations)
-in the released generator differ slightly from those in the original Table 7;
-the final Table 7 / Figure 5 will be regenerated from the paper's stated inputs
-so the manuscript and code agree.]*
+The surface coarsened from 0.80 mm (medium sand) to 5.0 mm (fine gravel) — a
+6.3× increase — forming a gravel armor that limits further transport, with the
+bed degrading by 0.31 ft. *[replaces: "from 0.80 mm to 7.2 mm — a 9× increase …
+10.6 ft of clear-water scour."]* Mass is conserved to ~10⁻¹⁵ over the hydrograph,
+and the erosion is transport-limited (the per-step Courant limiter never binds).
+This self-limiting armoring is the primary physical mechanism controlling
+long-term degradation below dams and is consistent with field observations
+(Williams and Wolman, 1984). The demonstration is included as evidence of
+extensibility; full pier-scale coupling between the ALR vortex field and the
+morphodynamic engine is future work (Section 5).
 
 ---
 
@@ -252,17 +248,29 @@ Vorticity converges to <0.4% between the last two radii; circulation conserved t
 Particle-count reduction to equal in-zone accuracy (error ∝ 1/√N): **≈4.7×**.
 *[Old table framed this as a 12× particle reduction / 0.18% error / 19× speedup.]*
 
-### Table 7 — Sediment extensibility (regenerate from paper's exact inputs)
+### Table 7 — Sediment extensibility (regenerated, paper's exact scenario)
 
-Corrected mass-conserving engine, current generator inputs: initial d50 0.80 mm →
-final ≈5.0 mm (≈6.3× coarsening), armor forms, degradation ≈0.3 ft, mass residual
-~10⁻¹⁵. *[Old: 0.80 → 7.2 mm (9×), 10.6 ft.]* Final table to be produced from the
-manuscript's stated hydrograph (peak Q, durations) so code and table agree.
+Scenario: 500 × 40 ft channel, slope 0.002, 6-fraction sand-gravel bed, zero
+upstream feed, 5-step hydrograph (100/300/600/900/300 cfs over 2000/600/100/20/200 h;
+2920 h total, 900 cfs peak).
+
+| Quantity | Corrected engine | *[Old / submitted]* |
+|---|---|---|
+| Initial surface d50 | 0.80 mm | 0.80 mm |
+| Final surface d50 | 5.0 mm | *[7.2 mm]* |
+| Coarsening ratio | 6.3× | *[9×]* |
+| Bed degradation | 0.31 ft | *[10.6 ft]* |
+| Armor forms | yes | yes |
+| Mass residual | ~10⁻¹⁵ | *[not conserved]* |
 
 ---
 
-## Figures to regenerate
+## Figures
 
 - **Figure 3** (Melville K_I + scour with/without amplification): the "with
-  amplification" curve now uses the Tier-1 geometric factor (≈1.11×), not 1.44×.
-- **Figure 5** (surface d50 coarsening): regenerate — 0.80 → ~5.0 mm, self-limiting.
+  amplification" curve already used the Tier-1 geometric factor (≈1.11×), not the
+  1.44× Tier-2 value, so the plotted curves are **unchanged**. Only the caption /
+  §3.4 text referencing a separate 1.44× Tier-2 amplification is revised. A clean
+  regenerated version (`Figure3_revised.png`) is provided.
+- **Figure 5** (surface d50 coarsening): regenerated (`Figure5_revised.png`) —
+  0.80 → 5.0 mm (6.3×), self-limiting armor, 0.31 ft degradation.

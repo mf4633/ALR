@@ -88,14 +88,15 @@ The active-layer/Exner sediment routine used in the extensibility demonstration
 did not conserve mass; it over-eroded, producing the reported 10.6 ft of
 degradation and 9× (0.80 → 7.2 mm) surface coarsening. I rewrote it as a
 mass-conserving Hirano active-layer model (mass residual now ~10⁻¹⁵). With
-conservation enforced, armoring is **self-limiting**, as it should be: the
-corrected scenario coarsens ~6× (0.80 → ~5.0 mm) and degrades on the order of a
-foot rather than ten. The qualitative conclusion (armor formation limits
-long-term degradation below a dam) is unchanged and, if anything, better
-illustrated. Table 7 and Figure 5 are regenerated. *(Note: the exact scenario
-inputs in the released generator differ slightly from those in the submitted
-Table 7; the final numbers will be produced from the paper's stated inputs so
-the table and code agree.)*
+conservation enforced, armoring is **self-limiting**, as it should be. For the
+paper's exact scenario (500 × 40 ft channel, zero feed, the 5-step / 2920-h
+hydrograph with 900 cfs peak), the corrected engine coarsens the surface
+**0.80 → 5.0 mm (6.3×)** and degrades the bed by **~0.31 ft**, with mass
+conserved to ~10⁻¹⁵. The former 10.6 ft was an over-erosion symptom of the
+non-conserving update; the erosion is transport-limited (the per-step Courant
+limiter never binds), not artificially clipped. The qualitative conclusion
+(armor formation limits long-term degradation below a dam) is unchanged and, if
+anything, better illustrated. Table 7 and Figure 5 are regenerated accordingly.
 
 ## 4. Critical-shear physics corrected (Section 2.4; Section 3.2 Shields benchmark)
 
