@@ -191,10 +191,11 @@ def compute_free_surface_correction(
     u_star_corr = v_mag * np.sqrt(f_corr / 8.0)
     bed_shear_corr = RHO * u_star_corr ** 2
 
-    # Re-compute scour risk with corrected shear
-    tau_c = sediment.critical_shear_psf
+    # Re-compute scour risk with corrected shear. The logistic classifier is
+    # centred on the empirical design shear, not the physical critical shear.
+    tau_design = sediment.scour_design_shear_psf
     scour_risk_corr, _ = _vectorized_scour_risk(
-        bed_shear_corr, tau_c,
+        bed_shear_corr, tau_design,
         steepness=sediment.scour_steepness,
         midpoint=sediment.scour_midpoint,
     )

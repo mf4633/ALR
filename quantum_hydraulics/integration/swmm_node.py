@@ -169,41 +169,106 @@ class NodeMetrics:
         }
 
 
+# Constants for grain-scale sediment physics (imperial).
+_RHO_WATER = 1.94    # slug/ft3
+_NU_WATER = 1.1e-5   # ft2/s (kinematic viscosity at 60F)
+_G = 32.2            # ft/s2
+
+
+def shields_critical_shear_psf(d50_mm: float,
+                               density_slugs_ft3: float = 5.14) -> float:
+    """
+    Critical (incipient-motion) bed shear stress from the Shields curve, using
+    the Soulsby & Whitehouse (1997) explicit fit -- the canonical dimensionless
+    threshold for NON-COHESIVE sediment:
+
+        theta_c = 0.30 / (1 + 1.2 D*) + 0.055 [1 - exp(-0.020 D*)]
+        D*      = d ((s - 1) g / nu^2)^(1/3)
+        tau_c   = theta_c (rho_s - rho) g d
+
+    This is a first-principles, grain-size-derived threshold (no calibration to
+    a design curve), so it fixes the previously hard-coded critical shears that
+    implied physically impossible Shields parameters (theta_c ~ 0.6 for sand).
+
+    Valid only for non-cohesive grains (sand/gravel). For silt/clay, cohesion
+    -- not the Shields curve -- governs the erosion threshold, so callers should
+    supply a cohesive critical shear directly.
+    """
+    d_ft = d50_mm / 304.8
+    s = density_slugs_ft3 / _RHO_WATER
+    d_star = d_ft * ((s - 1.0) * _G / _NU_WATER ** 2) ** (1.0 / 3.0)
+    theta_c = (0.30 / (1.0 + 1.2 * d_star)
+               + 0.055 * (1.0 - np.exp(-0.020 * d_star)))
+    return theta_c * (density_slugs_ft3 - _RHO_WATER) * _G * d_ft
+
+
 @dataclass
 class SedimentProperties:
-    """Sediment material properties for scour analysis."""
+    """Sediment material properties for scour analysis.
+
+    Two physically distinct shear thresholds are tracked:
+
+    * ``critical_shear_psf`` -- incipient-motion critical shear governing the
+      Shields parameter and Meyer-Peter-Muller transport. For non-cohesive
+      grains this is derived from the Shields curve (see
+      :func:`shields_critical_shear_psf`); for cohesive silt/clay it is an
+      empirical cohesive erosion threshold.
+    * ``scour_design_shear_psf`` -- the empirical, HEC-18-derived design shear
+      at which the logistic scour-risk classifier is centred. Incipient motion
+      is not the same as a scour-design hazard, so this is kept separate rather
+      than overloaded onto the physical critical shear. Defaults to
+      ``critical_shear_psf`` when not supplied.
+    """
 
     name: str
-    critical_shear_psf: float  # Critical shear stress (psf)
+    critical_shear_psf: float  # Incipient-motion critical shear (psf)
     d50_mm: float              # Median particle diameter (mm)
     density_slugs_ft3: float   # Particle density (slugs/ft3)
     # Calibrated scour-risk logistic curve parameters (HEC-18 derived)
     scour_steepness: float = 2.5   # Logistic curve steepness k
     scour_midpoint: float = 1.0    # Logistic curve midpoint m (excess ratio)
+    # Empirical design shear the risk classifier is centred on (psf).
+    scour_design_shear_psf: Optional[float] = None
+
+    def __post_init__(self):
+        if self.scour_design_shear_psf is None:
+            self.scour_design_shear_psf = self.critical_shear_psf
 
     @classmethod
     def sand(cls) -> 'SedimentProperties':
-        return cls("sand", 0.10, 0.5, 5.14, scour_steepness=3.0, scour_midpoint=0.8)
+        return cls("sand", shields_critical_shear_psf(0.5), 0.5, 5.14,
+                   scour_steepness=3.0, scour_midpoint=0.8,
+                   scour_design_shear_psf=0.10)
 
     @classmethod
     def fine_sand(cls) -> 'SedimentProperties':
-        return cls("fine_sand", 0.06, 0.2, 5.14, scour_steepness=3.2, scour_midpoint=0.7)
+        return cls("fine_sand", shields_critical_shear_psf(0.2), 0.2, 5.14,
+                   scour_steepness=3.2, scour_midpoint=0.7,
+                   scour_design_shear_psf=0.06)
 
     @classmethod
     def coarse_sand(cls) -> 'SedimentProperties':
-        return cls("coarse_sand", 0.15, 1.0, 5.14, scour_steepness=2.5, scour_midpoint=1.0)
+        return cls("coarse_sand", shields_critical_shear_psf(1.0), 1.0, 5.14,
+                   scour_steepness=2.5, scour_midpoint=1.0,
+                   scour_design_shear_psf=0.15)
 
     @classmethod
     def gravel(cls) -> 'SedimentProperties':
-        return cls("gravel", 0.30, 10.0, 5.14, scour_steepness=2.0, scour_midpoint=1.2)
+        return cls("gravel", shields_critical_shear_psf(10.0), 10.0, 5.14,
+                   scour_steepness=2.0, scour_midpoint=1.2,
+                   scour_design_shear_psf=0.30)
 
     @classmethod
     def silt(cls) -> 'SedimentProperties':
-        return cls("silt", 0.08, 0.05, 5.14, scour_steepness=2.5, scour_midpoint=1.0)
+        # Cohesive: Shields does not apply; empirical cohesive erosion threshold.
+        return cls("silt", 0.08, 0.05, 5.14, scour_steepness=2.5,
+                   scour_midpoint=1.0)
 
     @classmethod
     def clay(cls) -> 'SedimentProperties':
-        return cls("clay", 0.25, 0.002, 5.14, scour_steepness=1.5, scour_midpoint=1.5)
+        # Cohesive: erosion resisted by cohesion, not grain weight.
+        return cls("clay", 0.25, 0.002, 5.14, scour_steepness=1.5,
+                   scour_midpoint=1.5)
 
 
 class QuantumNode:
@@ -552,15 +617,18 @@ class QuantumNode:
         Tuple[float, float, float]
             (scour_risk_index, shields_parameter, excess_shear_ratio)
         """
-        tau_c = self.sediment.critical_shear_psf
+        # The risk classifier is centred on the empirical design shear, which
+        # is a scour-hazard threshold -- distinct from the physical incipient-
+        # motion critical shear used for the Shields parameter / MPM below.
+        tau_design = self.sediment.scour_design_shear_psf
 
-        if tau_c <= 0:
+        if tau_design <= 0:
             return 0.0, 0.0, 0.0
 
-        # Dimensionless shear (similar to Shields parameter concept)
-        excess_ratio = bed_shear_stress / tau_c
+        # Design excess-shear ratio (drives the logistic classifier)
+        excess_ratio = bed_shear_stress / tau_design
 
-        # Shields parameter (for reference)
+        # Shields parameter (physical, from actual bed shear)
         d_ft = self.sediment.d50_mm / 304.8  # mm to feet
         rho_s = self.sediment.density_slugs_ft3
         shields = bed_shear_stress / ((rho_s - self.RHO) * self.G * d_ft) if d_ft > 0 else 0.0

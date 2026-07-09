@@ -281,13 +281,16 @@ class Mesh2DResults:
         u_star = v_mag * np.sqrt(friction_factor / 8.0)
         bed_shear = RHO * u_star ** 2
 
-        # Scour metrics
+        # Scour metrics. The risk classifier is centred on the empirical design
+        # shear; the Shields parameter and MPM transport use the physical
+        # incipient-motion critical shear.
         tau_c = self.sediment.critical_shear_psf
+        tau_design = self.sediment.scour_design_shear_psf
         d_ft = self.sediment.d50_mm / 304.8
         rho_s = self.sediment.density_slugs_ft3
 
         scour_risk, excess = _vectorized_scour_risk(
-            bed_shear, tau_c,
+            bed_shear, tau_design,
             steepness=self.sediment.scour_steepness,
             midpoint=self.sediment.scour_midpoint,
         )
@@ -397,6 +400,7 @@ class Mesh2DResults:
         results = []
 
         tau_c = self.sediment.critical_shear_psf
+        tau_design = self.sediment.scour_design_shear_psf
         d_ft = self.sediment.d50_mm / 304.8
         rho_s = self.sediment.density_slugs_ft3
 
@@ -452,8 +456,9 @@ class Mesh2DResults:
             # TKE from induced velocities
             tke = 0.5 * np.mean(np.sum(induced ** 2, axis=1))
 
-            # Recompute scour metrics with augmented shear (calibrated)
-            excess_q = tau_quantum / tau_c
+            # Recompute scour metrics with augmented shear (calibrated).
+            # Risk classifier keys off the empirical design shear.
+            excess_q = tau_quantum / tau_design
             _k = self.sediment.scour_steepness
             _m = self.sediment.scour_midpoint
             risk_q = 1.0 / (1.0 + np.exp(-_k * (excess_q - _m)))
