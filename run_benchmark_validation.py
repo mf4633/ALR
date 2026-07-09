@@ -154,12 +154,19 @@ def checks_shields_diagram(verbose=False):
         f"theta_c={thetas[3]:.4f}",
     ))
 
-    # Theta should DECREASE with grain size (in the turbulent range)
-    # This follows the Shields curve: at high Re*, theta approaches 0.047
+    # The Shields curve is NON-monotonic in grain size: theta_c has a minimum
+    # near D* ~ 10 (medium/coarse sand), rising in the viscous range (finer)
+    # and rising again toward the fully-rough plateau (~0.05-0.06) for gravel.
+    # (The previous check asserted a monotonic decrease -- that only holds up to
+    # the minimum and is wrong across the sand-to-gravel span. The Soulsby &
+    # Whitehouse 1997 fit now used for tau_c captures the correct U-shape.)
+    theta_min = min(thetas)
     results.append(CheckResult(
-        "Shields decreases with grain size (turbulent trend)",
-        thetas[3] < thetas[2] < thetas[1],
-        f"sand={thetas[1]:.3f} > coarse={thetas[2]:.3f} > gravel={thetas[3]:.3f}",
+        "Shields curve is U-shaped with minimum in the sand range",
+        thetas[0] > theta_min and thetas[3] > theta_min
+        and thetas[3] == max(thetas),
+        f"fine={thetas[0]:.3f}, sand={thetas[1]:.3f}, coarse={thetas[2]:.3f}, "
+        f"gravel={thetas[3]:.3f} (min={theta_min:.3f})",
     ))
 
     # Critical shear should increase with grain size (tau_c_gravel > tau_c_sand)
