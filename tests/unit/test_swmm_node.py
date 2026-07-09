@@ -56,9 +56,28 @@ class TestSedimentProperties:
     def test_sand_defaults(self):
         s = SedimentProperties.sand()
         assert s.name == "sand"
-        assert s.critical_shear_psf == 0.10
+        # critical_shear_psf is now the physical Shields incipient-motion value
+        # (~0.005 psf for 0.5 mm sand); the empirical design threshold is 0.10.
+        assert 0.004 < s.critical_shear_psf < 0.007
+        assert s.scour_design_shear_psf == 0.10
         assert s.d50_mm == 0.5
         assert s.density_slugs_ft3 == 5.14
+
+    def test_shields_critical_shear_physical(self):
+        """Preset critical shears imply physically valid Shields parameters."""
+        RHO, G = 1.94, 32.2
+        for preset in (SedimentProperties.fine_sand(), SedimentProperties.sand(),
+                       SedimentProperties.coarse_sand(), SedimentProperties.gravel()):
+            d_ft = preset.d50_mm / 304.8
+            theta_c = preset.critical_shear_psf / (
+                (preset.density_slugs_ft3 - RHO) * G * d_ft)
+            assert 0.02 < theta_c < 0.10  # classic Shields range
+
+    def test_design_shear_defaults_to_critical(self):
+        """Custom/cohesive sediment: design threshold falls back to critical."""
+        s = SedimentProperties(name="rock", critical_shear_psf=2.0,
+                               d50_mm=50.0, density_slugs_ft3=5.5)
+        assert s.scour_design_shear_psf == 2.0
 
     def test_fine_sand(self):
         s = SedimentProperties.fine_sand()
@@ -375,22 +394,23 @@ class TestScourRisk:
         """At the logistic midpoint (excess ratio = scour_midpoint), risk ~0.5.
 
         The midpoint is a per-sediment calibration (e.g. sand uses 0.8, i.e.
-        scour onset just below nominal critical shear), so evaluate at
-        tau_c * scour_midpoint rather than assuming the midpoint is tau_c.
+        scour onset just below nominal design shear), so evaluate at
+        tau_design * scour_midpoint. The classifier is centred on the empirical
+        design shear, not the physical incipient-motion critical shear.
         """
-        tau_c = node.sediment.critical_shear_psf
+        tau_design = node.sediment.scour_design_shear_psf
         m = node.sediment.scour_midpoint
-        risk, shields, excess = node._compute_scour_risk(tau_c * m)
+        risk, shields, excess = node._compute_scour_risk(tau_design * m)
         assert abs(risk - 0.5) < 0.05
 
     def test_high_shear_high_risk(self, node):
-        tau_c = node.sediment.critical_shear_psf
-        risk, shields, excess = node._compute_scour_risk(tau_c * 3.0)
+        tau_design = node.sediment.scour_design_shear_psf
+        risk, shields, excess = node._compute_scour_risk(tau_design * 3.0)
         assert risk > 0.9
 
     def test_excess_ratio(self, node):
-        tau_c = node.sediment.critical_shear_psf
-        risk, shields, excess = node._compute_scour_risk(tau_c * 2.0)
+        tau_design = node.sediment.scour_design_shear_psf
+        risk, shields, excess = node._compute_scour_risk(tau_design * 2.0)
         assert abs(excess - 2.0) < 0.01
 
     def test_shields_parameter_positive(self, node):
