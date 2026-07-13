@@ -1,0 +1,6 @@
+Rank,Node,Width_ft,Peak_Q_cfs,Depth_ft,V_max_fps,BedShear_psf,Shields,ScourDepth_ft_yr,RiskIndex,Screen
+1,J4,5.0,79.9,1.36,7.72,1.605,0.47,10.00,1.000,HIGH
+2,J2,4.0,50.8,1.17,6.67,1.302,0.39,10.00,0.998,HIGH
+3,OUT1,6.0,76.4,1.32,6.84,1.254,0.37,10.00,0.997,HIGH
+4,J3,5.0,84.6,1.60,6.34,1.157,0.34,10.00,0.995,HIGH
+5,J1,4.0,30.0,1.04,4.56,0.628,0.19,10.00,0.857,MODERATE
