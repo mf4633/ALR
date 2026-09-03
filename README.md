@@ -235,3 +235,7 @@ MIT License — see [LICENSE](LICENSE).
 **Michael Flynn, PE**
 McGill Associates, PA
 Asheville, North Carolina
+
+## See also
+
+Reference tables behind the Manning's baseline and scour checks in this work: the [Manning's n reference card](https://pe-calc.com/cheat-sheets/mannings-n.html) and the [bridge scour equations sheet (HEC-18)](https://pe-calc.com/cheat-sheets/bridge-scour-equations.html) on pe-calc.com.
